@@ -18,6 +18,8 @@ repros = [
     "sonic-frr",      "sonic-mgmt-common",    "sonic-py-swsssdk",        "sonic-snmpagent",  "sonic-utilities"
 ]
 
+repros = ["sonic-buildimage" ]
+
 #
 # Util function: debugprint
 #
@@ -134,14 +136,17 @@ def get_company_from_id(id, email):
         # NOTFOUND: Can't find profile for a given id
         #
         src = "NOTFOUND_PROFILE"
-                        
+        
     if "company" in response:
         comp = response["company"]
         if comp == None:
-            #
-            # NOTFOUND: User sets company  as None in profile
-            #            
-            ret, comp = use_email_to_find_company(email, "NOTFOUND_COMPANYISNONE")
+            if id not in email or "noreply.github.com" not in email:
+                #
+                # NOTFOUND: User sets company  as None in profile
+                #            
+                ret, comp = use_email_to_find_company(email, "NOTFOUND_COMPANYISNONE")
+            else:
+                comp = "NOTFOUND_COMPANYISNONE"
 
         comp = fixup_companyname(comp)
     else:
@@ -190,6 +195,12 @@ def company_name_check(key):
         return True, "NVIDIA"
     if "nokia" in key:
         return True, "NOKIA"
+    if "barefootnetworks" in key:
+        return True, "INTEL"
+    if "innovium" in key:
+        return True, "INNOVIUM"
+    if "cavium" in key:
+        return True, "CAVIUM"
     
     return False, ""
 
@@ -298,6 +309,7 @@ def count_repro_commits_via_short_log(repro, years):
                 # Try to get company information from profile
                 url = "https://api.github.com/search/users?q={}".format(name)
                 response = lookup_with_retry(url)
+
                 if "items" in response and len(response["items"])>0:
                     items=response["items"]
                     # TODO assume first item for now
@@ -309,7 +321,7 @@ def count_repro_commits_via_short_log(repro, years):
 
             # Update github id to company mapping db
             add_entry_to_id2company(name, comp)
-                    
+
         debugprint("{} : {} : {} : {}".format(name, ccount, comp, email))
 
     os.chdir("..")            
