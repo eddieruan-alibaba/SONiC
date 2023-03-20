@@ -1,0 +1,5 @@
+# Pull codes from repro
+./git_count.py --pull_workspace
+
+# Count all repros' commits with debug enable
+./git_count.py --debug --token <token string>
