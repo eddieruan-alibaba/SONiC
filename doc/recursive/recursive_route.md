@@ -8,6 +8,21 @@
 
 <!-- omit in toc -->
 ## Table of Content
+- [Goal and Scope](#goal-and-scope)
+  - [FRR's Current Limitations](#frrs-current-limitations)
+    - [FRR flattens nexthop](#frr-flattens-nexthop)
+  - [Issue from Alibaba Use Case](#issue-from-alibaba-use-case)
+  - [Issue from MSFT Use Case](#issue-from-msft-use-case)
+  - [Recursive Routes Convergences Improvements](#recursive-routes-convergences-improvements)
+- [High Level Design](#high-level-design)
+- [Low Level Design](#low-level-design)
+  - [Zebra skip flattening codes for FPM and program multi level NHGs](#zebra-skip-flattening-codes-for-fpm-and-program-multi-level-nhgs)
+  - [FPM's new schema for recursive NHG](#fpms-new-schema-for-recursive-nhg)
+  - [Orchagent changes](#orchagent-changes)
+  - [SAI API changes](#sai-api-changes)
+  - [NHG update Handling](#nhg-update-handling)
+- [Unit Test](#unit-test)
+- [References](#references)
 
 ## Goal and Scope
 A recursive route is a routing mechanism in which the routing decision for a specific destination is determined by referring to another routing table, which is then lookuped up recursively until a final route is resolved. Recursive routing is a key concept in routing protocols and is often used in complex network topologies to ensure that data reaches its intended destination, even when that destination is not directly reachable from the originating device. In many cases, recursive routes are used in VPN or tunneling scenarios. For VPN cases' handling, it would be done via BGP PIC HLD. For this HLD, we focus on global table's recursive routes' handling
