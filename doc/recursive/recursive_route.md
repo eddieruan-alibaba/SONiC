@@ -10,95 +10,103 @@
 ## Table of Content
 - [Goal and Scope](#goal-and-scope)
   - [FRR's Current Limitations](#frrs-current-limitations)
-    - [FRR flattens nexthop](#frr-flattens-nexthop)
-    - [Recursive nexthop change notification](#recursive-nexthop-change-notification)
-    - [Dataplane refresh for Nexthop group change](#dataplane-refresh-for-nexthop-group-change)
-  - [Issue from Alibaba Use Case](#issue-from-alibaba-use-case)
-  - [Issue from MSFT Use Case](#issue-from-msft-use-case)
-  - [Recursive Routes Convergences Improvements](#recursive-routes-convergences-improvements)
+- [FRR Current Approaches](#frr-current-approaches)
+  - [NH dependency tree](#nh-dependency-tree)
+  - [NHT list from route node](#nht-list-from-route-node)
+  - [zebra\_rib\_evaluate\_rn\_nexthops](#zebra_rib_evaluate_rn_nexthops)
+  - [Zebra triggers routes redownloading from protocol process](#zebra-triggers-routes-redownloading-from-protocol-process)
+- [Triggers Events](#triggers-events)
 - [High Level Design](#high-level-design)
 - [Low Level Design](#low-level-design)
-  - [Zebra skip flattening codes for FPM and program multi level NHGs](#zebra-skip-flattening-codes-for-fpm-and-program-multi-level-nhgs)
+  - [Recursive nexthop change notification](#recursive-nexthop-change-notification)
+  - [Dataplane refresh for Nexthop group change](#dataplane-refresh-for-nexthop-group-change)
+  - [Zebra changes](#zebra-changes)
   - [FPM's new schema for recursive NHG](#fpms-new-schema-for-recursive-nhg)
   - [Orchagent changes](#orchagent-changes)
-  - [SAI API changes](#sai-api-changes)
   - [NHG update Handling](#nhg-update-handling)
 - [Unit Test](#unit-test)
 - [References](#references)
 
 ## Goal and Scope
-A recursive route is a routing mechanism in which the routing decision for a specific destination is determined by referring to another routing table, which is then looked up recursively until a final route is resolved. Recursive routing is a key concept in routing protocols and is often used in complex network topologies to ensure that data reaches its intended destination, even when that destination is not directly reachable from the originating device. In many cases, recursive routes are used in VPN or tunneling scenarios. For VPN cases' handling, it would be done via BGP PIC HLD. For this HLD, we focus on global table's recursive routes' handling
+A recursive route is a routing mechanism in which the routing decision for a specific destination is determined by referring to another routing table, which is then looked up recursively until a final route is resolved. Recursive routing is a key concept in routing protocols and is often used in complex network topologies to ensure that data reaches its intended destination, even when that destination is not directly reachable from the originating device. In many cases, recursive routes are used in VPN or tunneling scenarios.
 
 ### FRR's Current Limitations
-FRR zebra uses struct nexthop to track next hop information. If it is a recursive nexthop, its flags field would be set NEXTHOP_FLAG_RECURSIVE bit and its resolved field stores a pointer which points a list of nexthops obtained by recursive resolution. Therefore zebra keeps hierarchical relationships on the recursive nexthops. Because the Linux kernel lacks support for recursive routes, FRR zebra flattens the next-hop information of recursive routes when transferring it from Zebra to FPM or the Linux kernel.
+FRR zebra uses struct nexthop to track next hop information. If it is a recursive nexthop, its flags field would be set NEXTHOP_FLAG_RECURSIVE bit and its resolved field stores a pointer which points a list of nexthops obtained by recursive resolution. Therefore zebra keeps hierarchical relationships on the recursive nexthops. 
 
-#### FRR flattens nexthop
-TODO: Find out how we flatten nexthop, via zebra_nhg_install_kernel() ?? if using ALL_NEXTHOPS_PTR??
+Because the Linux kernel lacks support for recursive routes, FRR zebra flattens the next-hop information of recursive routes when transferring it from Zebra to FPM or the Linux kernel. Currently, when a path goes down, zebra would inform various protocol processes and let them replay routes update events accordingly. 
 
+This leads an issue discussed in the SONiC Routing Working Group (https://lists.sonicfoundation.dev/g/sonic-wg-routing/files/SRv6%20use%20case%20-%20Routing%20WG.pptx).
 
-#define ALL_NEXTHOPS_PTR(head, nhop)					\
-	(nhop) = ((head)->nexthop);					\
-	(nhop);								\
-	(nhop) = nexthop_next(nhop)
-
-
-/*
- * Iteration step for ALL_NEXTHOPS macro:
- * This is the tricky part. Check if `nexthop' has
- * NEXTHOP_FLAG_RECURSIVE set. If yes, this implies that `nexthop' has
- * at least one nexthop attached to `nexthop->resolved', which will be
- * the next one.
- *
- * If NEXTHOP_FLAG_RECURSIVE is not set, `nexthop' will progress in its
- * current chain. In case its current chain end is reached, it will move
- * upwards in the recursion levels and progress there. Whenever a step
- * forward in a chain is done, recursion will be checked again.
- * In a nustshell, it's equivalent to a pre-traversal order assuming that
- * left branch is 'resolved' and right branch is 'next':
- * https://en.wikipedia.org/wiki/Tree_traversal#/media/File:Sorted_binary_tree_preorder.svg
- */
-struct nexthop *nexthop_next(const struct nexthop *nexthop)
-{
-	if (CHECK_FLAG(nexthop->flags, NEXTHOP_FLAG_RECURSIVE))
-		return nexthop->resolved;
-
-	if (nexthop->next)
-		return nexthop->next;
-
-	for (struct nexthop *par = nexthop->rparent; par; par = par->rparent)
-		if (par->next)
-			return par->next;
-
-	return NULL;
-}
-
-#### Recursive nexthop change notification
-Zebra stores nexthop information that depends on a route node of a route entry. Whenever a change occurs in the routes or a new nexthop registers with Zebra, Zebra recalculates the route entries used to resolve the nexthops. It then sends an nexthop change notification to the client that registered this nexthop. In certain situations, when there is a change in the resolving routes upon which intermediate-level recursive nexthops depend, Zebra does not need to trigger a nexthop change notification to be sent to the routing clients. Instead, it may achieve routing convergence by itself to expedite the efficiency of routing calculations.
-e.g.:
-
-nexthop A --> nexthop B --> nexthop C1,C2,C3
-
-A and B are recursive nexthops. If the route corresponding to C3 is withdrawn and Zebra can perform routing convergence calculations on its own, and if B is still active, there is no need to send a notification to Zebra clients about the change in the nexthop B.
-		       
-#### Dataplane refresh for Nexthop group change
-TODO:
-
-### Issue from Alibaba Use Case
 <figure align=center>
-    <img src="images/alibaba_issue.png" >
-    <figcaption>Figure 1. Alibaba Issue for Recursive Rerouting <figcaption>
+    <img src="images/srv6_igp2bgp.jpg" >
+    <figcaption>Figure 1. Alibaba issue Underlay routes flap affecting Overlay SRv6 routes <figcaption>
 </figure> 
-In Alibaba use case, there are 16 multi-hop eBGP paths over 32 single-hop eBGP paths. Due to FRR flattens all nexthop groups, zebra generates over 256 paths and trigger an zebra internal issue, uint8 is used for num_path. 
 
-### Issue from MSFT Use Case
-<figure align=center>
-    <img src="images/msft_issue.png" >
-    <figcaption>Figure 2. MSFT Issue for Recursive Rerouting <figcaption>
-</figure> 
-In MSFT use case, there is a transient preriod, 2 levels of ECMP groups are used which leads over 256 paths generated. That leads to a zebra crash issue. 
+The enhancement is discussed in https://datatracker.ietf.org/doc/draft-ietf-rtgwg-bgp-pic/. This HLD is outline an approach which could prevent BGP load balancing updates from being triggered by IGP load balancing updates. This is essentially the recursive VPN route support. 
 
-### Recursive Routes Convergences Improvements
-The main benefits for adding recursive routes support is to improve routes convergence time when underlay paths changes. When overlay nexthops' reachabilities are not changed in this event, there is no need to update overlay NHG or routes. But due to zebra flattens all NHG, currently, this kind of updates can't be avoided. 
+Note: 
+- This HLD only focus on recursive VPN routes support. Since SONiC doesn't have MPLS VPN support in master, the testing would focus on EVPN and SRv6 VPN only. 
+- The similar approach could be applied to global table's recursive routes support. But that requires SAI APIs. Therefore, global table's recursive routes support is not in the scope of this HLD.
+
+## FRR Current Approaches
+### NH dependency tree
+struct nexthop contains two fields, *resolved and *reparent for tracking nexthop resolution's dependencies. 
+
+	/* Nexthops obtained by recursive resolution.
+	 *
+	 * If the nexthop struct needs to be resolved recursively,
+	 * NEXTHOP_FLAG_RECURSIVE will be set in flags and the nexthops
+	 * obtained by recursive resolution will be added to `resolved'.
+	 */
+	struct nexthop *resolved;
+	/* Recursive parent */
+	struct nexthop *rparent;
+
+https://github.com/FRRouting/frr/blob/858cc75b434344ae0b25eccaf6eef03debe4a031/lib/nexthop.h#L99C1-L105C26
+
+TODO: Add more detail information on when these two fields are updated.
+
+### NHT list from route node
+Each route node (struct rib_dest_t_ ) contains a nht field which lists out all nht prefixes which depend on this route node. 
+
+	/*
+	 * The list of nht prefixes that have ended up
+	 * depending on this route node.
+	 * After route processing is returned from
+	 * the data plane we will run evaluate_rnh
+	 * on these prefixes.
+	 */
+	struct rnh_list_head nht;
+
+TODO: add more detail information on how nht gets updated. 
+
+### zebra_rib_evaluate_rn_nexthops
+zebra_rib_evaluate_rn_nexthops() leverage the above list to trigger each depending recursive nh to get reevaluated
+
+list https://github.com/FRRouting/frr/blob/master/zebra/zebra_rib.c#L850C1-L856C45
+
+TODO: Check how NHG update gets triggered. Couple discussion points
+1. How to trigger NHG update
+2. How to flatten IGP NHGs, and BGP NHG accordingly. In hardware, we only have two level of NHG budgets. In general, we need to collapse all IGP NHG into one hw NHG and BGP NHG into another. 
+
+### Zebra triggers routes redownloading from protocol process
+TODO: How does NH update inform other protocol processes for triggered routes redownloading? Couple discussion points
+1. For kernel update, we might need to redownload all routes for flattening NHG.
+2. For the address family which skip kernel programming, can we avoid this trigger. 
+   
+## Triggers Events
+Here are a list of trigger events which we want to take care for getting faster routes convergence and minimizing hardware traffic loss. 
+
+| Trigger Types |     Events    |       Possible handling          | 
+|:---|:-----------|:----------------------|
+| IGP local failure | A local link goes down | Local interface routes would be removed. From this event, zebra_rib_evaluate_rn_nexthops() would be triggered |
+| IGP remote failture | A remote link goes down, IGP leaf's reachability is not changed, only IGP paths are updated. | IGP updates IGP leaf's NHG. No need to trigger BGP update since reachability is not changed. The handling would via zebra_rib_evaluate_rn_nexthops() ?? TODO ?? . It is recursive route handling case. |
+| IGP remote failure  | A remote IGP node failure or a remote IGP node is unreachable. But the remote PE route could be re-resolved via a new IGP path | IGP triggers IGP leaf delete event, which triggers zebra_rib_evaluate_rn_nexthops(). Since remote PE is still reachable, it is recursive route handling case. |
+| IGP remote failure  | A remote PE node failure or a remote PE node is unreachable | IGP triggers IGP leaf delete event, which triggers zebra_rib_evaluate_rn_nexthops(). This is the PIC handling case. |
+| BGP remote failure  | BGP remote node down | It should be detected by IGP remote node down first before BGP reacts. This is the PIC handling case |
+| BGP remote failure | Remote BGP does not response, remote PE is still available. | BGP will trigger leaf updates. It is a BGP bug situation in deployment and not in this HLD's scope |
+| BGP local failure | local BGP does not response.| It is a BGP bug situation in deployment and not in this HLD's scope |
+
 
 ## High Level Design
 The main changes are in the following areas
@@ -106,16 +114,21 @@ The main changes are in the following areas
 - Zebra would have an option to enable recursive route support. In this mode, zebra would pass both underlay and overlay NHGs to fpm. But zebra will still pass collapsed NHG to Linux kernel. 
 - fpm needs to add a new schema to take each member as NHG id and update APP DB.
 - orchagent picks up event from APP DB and trigger NHG programming. Neighorch needs to handle this new schema without change too much on existing codes.
-- SAI needs to add APIs to support NHG over NHG case.
-- https://github.com/sonic-net/SONiC/pull/1425 doesn't handle NHG update case, which would be handled in this HLD for improving route convergence. 
+
 
 ## Low Level Design
-### Zebra skip flattening codes for FPM and program multi level NHGs
+### Recursive nexthop change notification
+Zebra stores nexthop information that depends on a route node of a route entry. Whenever a change occurs in the routes or a new nexthop registers with Zebra, Zebra recalculates the route entries used to resolve the nexthops. It then sends an nexthop change notification to the client that registered this nexthop. In certain situations, when there is a change in the resolving routes upon which intermediate-level recursive nexthops depend, Zebra does not need to trigger a nexthop change notification to be sent to the routing clients. Instead, it may achieve routing convergence by itself to expedite the efficiency of routing calculations.
+e.g.:
+
+nexthop A --> nexthop B --> nexthop C1,C2,C3
+
+A and B are recursive nexthops. If the route corresponding to C3 is withdrawn and Zebra can perform routing convergence calculations on its own, and if B is still active, there is no need to send a notification to Zebra clients about the change in the nexthop B.
+		       
+### Dataplane refresh for Nexthop group change
 TODO:
-1. How to skip flattening NHG.
-2. Need to add a level field in NHG
-3. For the global table, if we have more than 2 levels, we need to program the bottom most one, and collapsed the remaining ones. HW only supports up to 2 levels. 
-4. Once VPN is enabled, we will collapse all underlay levels, a.k.a we don't enable recursive route support. 
+### Zebra changes
+TODO:
 
 ### FPM's new schema for recursive NHG
 TODO
@@ -123,14 +136,8 @@ TODO
 ### Orchagent changes
 TODO
 
-### SAI API changes
-TODO: need Hasan and Praveen's help
-
 ### NHG update Handling
 TODO
-1. how to handle local interface down event
-2. how to handle IGP remote peer down event
-3. how to handle BGP remote peer down event
 
 ## Unit Test
 TODO
