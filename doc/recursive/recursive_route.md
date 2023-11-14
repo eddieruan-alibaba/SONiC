@@ -11,6 +11,8 @@
 - [Goal and Scope](#goal-and-scope)
   - [FRR's Current Limitations](#frrs-current-limitations)
     - [FRR flattens nexthop](#frr-flattens-nexthop)
+    - [Recursive nexthop change notification](#recursive-nexthop-change-notification)
+    - [Dataplane refresh for Nexthop group change](#dataplane-refresh-for-nexthop-group-change)
   - [Issue from Alibaba Use Case](#issue-from-alibaba-use-case)
   - [Issue from MSFT Use Case](#issue-from-msft-use-case)
   - [Recursive Routes Convergences Improvements](#recursive-routes-convergences-improvements)
@@ -25,7 +27,7 @@
 - [References](#references)
 
 ## Goal and Scope
-A recursive route is a routing mechanism in which the routing decision for a specific destination is determined by referring to another routing table, which is then lookuped up recursively until a final route is resolved. Recursive routing is a key concept in routing protocols and is often used in complex network topologies to ensure that data reaches its intended destination, even when that destination is not directly reachable from the originating device. In many cases, recursive routes are used in VPN or tunneling scenarios. For VPN cases' handling, it would be done via BGP PIC HLD. For this HLD, we focus on global table's recursive routes' handling
+A recursive route is a routing mechanism in which the routing decision for a specific destination is determined by referring to another routing table, which is then looked up recursively until a final route is resolved. Recursive routing is a key concept in routing protocols and is often used in complex network topologies to ensure that data reaches its intended destination, even when that destination is not directly reachable from the originating device. In many cases, recursive routes are used in VPN or tunneling scenarios. For VPN cases' handling, it would be done via BGP PIC HLD. For this HLD, we focus on global table's recursive routes' handling
 
 ### FRR's Current Limitations
 FRR zebra uses struct nexthop to track next hop information. If it is a recursive nexthop, its flags field would be set NEXTHOP_FLAG_RECURSIVE bit and its resolved field stores a pointer which points a list of nexthops obtained by recursive resolution. Therefore zebra keeps hierarchical relationships on the recursive nexthops. Because the Linux kernel lacks support for recursive routes, FRR zebra flattens the next-hop information of recursive routes when transferring it from Zebra to FPM or the Linux kernel.
@@ -69,6 +71,17 @@ struct nexthop *nexthop_next(const struct nexthop *nexthop)
 
 	return NULL;
 }
+
+#### Recursive nexthop change notification
+Zebra stores nexthop information that depends on a route node of a route entry. Whenever a change occurs in the routes or a new nexthop registers with Zebra, Zebra recalculates the route entries used to resolve the nexthops. It then sends an nexthop change notification to the client that registered this nexthop. In certain situations, when there is a change in the resolving routes upon which intermediate-level recursive nexthops depend, Zebra does not need to trigger a nexthop change notification to be sent to the routing clients. Instead, it may achieve routing convergence by itself to expedite the efficiency of routing calculations.
+e.g.:
+
+nexthop A --> nexthop B --> nexthop C1,C2,C3
+
+A and B are recursive nexthops. If the route corresponding to C3 is withdrawn and Zebra can perform routing convergence calculations on its own, and if B is still active, there is no need to send a notification to Zebra clients about the change in the nexthop B.
+		       
+#### Dataplane refresh for Nexthop group change
+TODO:
 
 ### Issue from Alibaba Use Case
 <figure align=center>
