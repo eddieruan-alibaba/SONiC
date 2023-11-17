@@ -64,10 +64,10 @@ struct nexthop contains two fields, *resolved and *reparent for tracking nexthop
 
 https://github.com/FRRouting/frr/blob/858cc75b434344ae0b25eccaf6eef03debe4a031/lib/nexthop.h#L99C1-L105C26
 
-TODO: Add more detail information on when these two fields are updated.
+When a routing entry (re) is processed by rib_process(), this function calls nexthop_active_update() to parse and refresh this re. The corresponding nexthop for this re is handled by nexthop_set_resolved(), *resolved is set to the nexthop of the route used to resolve this nexthop, *rparent will also be correspondingly set and the flag of this nexthop is set to NEXTHOP_FLAG_RECURSIVE. This is the method by which the recursive nexthop is flattened.
 
 ### NHT list from route node
-Each route node (struct rib_dest_t_ ) contains a nht field which lists out all nht prefixes which depend on this route node. 
+Each route node (struct rib_dest_t ) contains a nht field which lists out all nht prefixes which depend on this route node. 
 
 	/*
 	 * The list of nht prefixes that have ended up
@@ -78,12 +78,14 @@ Each route node (struct rib_dest_t_ ) contains a nht field which lists out all n
 	 */
 	struct rnh_list_head nht;
 
-TODO: add more detail information on how nht gets updated. 
+rib_gc_dest() invokes zebra_rib_evaluate_rn_nexthops() to update the nht.
 
 ### zebra_rib_evaluate_rn_nexthops
-zebra_rib_evaluate_rn_nexthops() leverage the above list to trigger each depending recursive nh to get reevaluated
 
 list https://github.com/FRRouting/frr/blob/master/zebra/zebra_rib.c#L850C1-L856C45
+
+zebra_rib_evaluate_rn_nexthops() leverage the above list to trigger each depending recursive nh to get reevaluated.
+It starts from the incoming route node (rn) and traverses upwards through all route nodes until it reaches a route node with a prefix of 0(default route). It obtains the nht list from the corresponding rib_dest_t. Then, it iterates through each prefix in the nht list, searching the routing table again. If it finds a route entry (re) for resolving, it updates rnh->resolved_route to this resolution. Subsequently, it calls zebra_rnh_store_in_routing_table to move the nht to the new rn's nht list corresponding to the resolved re.
 
 TODO: Check how NHG update gets triggered. Couple discussion points
 1. How to trigger NHG update
