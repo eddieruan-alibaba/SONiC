@@ -130,7 +130,9 @@ A and B are recursive nexthops. If the route corresponding to C3 is withdrawn an
 ### Dataplane refresh for Nexthop group change
 TODO:
 ### Zebra changes
-TODO:
+To enable the zebra to backwalk during zebra_rib_evaluate_rn_nexthops(), it is necessary to add a reverse reference in nhe pointing to the re pointer that references it. Additionally, in re, a reverse reference pointing to rib_dest_t should also be added.
+
+A new function will be introduced that, when called, triggers a backwalk. This is necessary due to changes in routing, requiring the reevaluation and update of routes, as well as the update of the RIB.
 
 ### FPM's new schema for recursive NHG
 TODO
