@@ -125,12 +125,13 @@ The main changes are in the following areas
 ## Low Level Design
 ### Zebra changes
 #### Recursive nexthop change notification
-Consider the case of recursive routes in the following diagram:
+Consider the case of recursive routes in the following diagram
 
 <figure align=center>
     <img src="images/recursive_routes.jpg" >
     <figcaption>Figure 2. EVPN Underlay recursive routes convergence<figcaption>
 </figure> 
+
 
 As described in the section "Routes Redownloading" above, if the prefix 100.0.0.1 via 10.1.0.68 is withdrawn from the IGP node, Zebra will explicitly redownload routes twice for recursive convergence with the help of the BGP client, one for the prefix 10.1.0.68 and another for the prefix 2.2.2.2. In this scenario, since the reachability of the prefix 2.2.2.2 remains unchanged and also Zebra has the dependency relationships between recursive NHGs, there is a chance to improve Zebra for fast route convergence by itself.
 
@@ -142,9 +143,9 @@ In order to enable Zebra to "Redownload Routes" without notifying protocol clien
     <figcaption>Figure 3. data structure modification for routes backwalk<figcaption>
 </figure>
 
+
 Functions below initialize the backwalk pointers
 
-/* Add RE to head of the route node. */
 static void rib_link(struct route_node *rn, struct route_entry *re, int process)
 {
 	rib_dest_t *dest;
@@ -166,8 +167,7 @@ static void rib_link(struct route_node *rn, struct route_entry *re, int process)
         ...	
  }
 
- int route_entry_update_nhe(struct route_entry *re,
-			   struct nhg_hash_entry *new_nhghe)
+int route_entry_update_nhe(struct route_entry *re, struct nhg_hash_entry *new_nhghe)
 {
 	struct nhg_hash_entry *old;
 	int ret = 0;
@@ -201,7 +201,6 @@ static void rib_link(struct route_node *rn, struct route_entry *re, int process)
 			new_nhghe->routes = list_new();
 		listnode_add(new_nhghe->routes, re);
 	}
-
 done:
 	return ret;
 }
@@ -212,6 +211,7 @@ After each routing operation, zebra_rib_evaluate_rn_nexthops() triggers routes r
     <img src="images/backwalk.jpg" >
     <figcaption>Figure 4. routes backwalk update<figcaption>
 </figure>
+
 
 ### Dataplane refresh for Nexthop group change
 TODO:
