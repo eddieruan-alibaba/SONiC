@@ -214,10 +214,10 @@ After each routing operation, zebra_rib_evaluate_rn_nexthops() triggers routes r
 </figure>
 
 
-### Dataplane refresh for Nexthop group change
+#### Dataplane refresh for Nexthop group change
 TODO:
 
-### FPM's new schema for recursive NHG
+#### FPM's new schema for recursive NHG
 TODO
 
 ### Orchagent changes
