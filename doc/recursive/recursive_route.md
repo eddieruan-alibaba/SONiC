@@ -146,62 +146,64 @@ In order to enable Zebra to "Redownload Routes" without notifying protocol clien
      
 Functions below initialize the backwalk pointers
 
-static void rib_link(struct route_node *rn, struct route_entry *re, int process) {
-	rib_dest_t *dest;
-	afi_t afi;
-	const char *rmap_name;
+    static void rib_link(struct route_node *rn, struct route_entry *re, int process)
+    {
+        rib_dest_t *dest;
+        afi_t afi;
+        const char *rmap_name;
 
-	assert(re && rn);
+        assert(re && rn);
 
-	dest = rib_dest_from_rnode(rn);
-	if (!dest) {
-		if (IS_ZEBRA_DEBUG_RIB_DETAILED)
-			rnode_debug(rn, re->vrf_id, "rn %p adding dest", rn);
+        dest = rib_dest_from_rnode(rn);
+        if (!dest) {
+            if (IS_ZEBRA_DEBUG_RIB_DETAILED)
+                rnode_debug(rn, re->vrf_id, "rn %p adding dest", rn);
 
-		dest = zebra_rib_create_dest(rn);
-	}
+            dest = zebra_rib_create_dest(rn);
+        }
 
-	re_list_add_head(&dest->routes, re);
-	re->pdest = dest;
+        re_list_add_head(&dest->routes, re);
+        re->pdest = dest;
         ...	
- }
+    }
 
-int route_entry_update_nhe(struct route_entry *re, struct nhg_hash_entry *new_nhghe) {
-	struct nhg_hash_entry *old;
-	int ret = 0;
+    int route_entry_update_nhe(struct route_entry *re, struct nhg_hash_entry *new_nhghe)
+    {
+        struct nhg_hash_entry *old;
+        int ret = 0;
 
-	if (new_nhghe == NULL) {
-		if (re->nhe) {
-			if (re->nhe->routes)
-				listnode_delete(re->nhe->routes, re);
-			zebra_nhg_decrement_ref(re->nhe);
-		}
-		re->nhe = NULL;
-		goto done;
-	}
+        if (new_nhghe == NULL) {
+            if (re->nhe) {
+                if (re->nhe->routes)
+                    listnode_delete(re->nhe->routes, re);
+                    zebra_nhg_decrement_ref(re->nhe);
+                }
+                re->nhe = NULL;
+                goto done;
+        }
 
-	if ((re->nhe_id != 0) && re->nhe && (re->nhe != new_nhghe)) {
-		old = re->nhe;
+        if ((re->nhe_id != 0) && re->nhe && (re->nhe != new_nhghe)) {
+            old = re->nhe;
 
-		route_entry_attach_ref(re, new_nhghe);
-		if (!new_nhghe->routes)
-			new_nhghe->routes = list_new();
-		listnode_add(new_nhghe->routes, re);
-		if (old) {
-			if (old->routes)
-				listnode_delete(old->routes, re);
-			zebra_nhg_decrement_ref(old);
-		}
-	} else if (!re->nhe) {
-		/* This is the first time it's being attached */
-		route_entry_attach_ref(re, new_nhghe);
-		if (!new_nhghe->routes)
-			new_nhghe->routes = list_new();
-		listnode_add(new_nhghe->routes, re);
-	}
-done:
-	return ret;
-}
+            route_entry_attach_ref(re, new_nhghe);
+            if (!new_nhghe->routes)
+                new_nhghe->routes = list_new();
+            listnode_add(new_nhghe->routes, re);
+            if (old) {
+                if (old->routes)
+                    listnode_delete(old->routes, re);
+                zebra_nhg_decrement_ref(old);
+            }
+        } else if (!re->nhe) {
+            /* This is the first time it's being attached */
+            route_entry_attach_ref(re, new_nhghe);
+            if (!new_nhghe->routes)
+                new_nhghe->routes = list_new();
+            listnode_add(new_nhghe->routes, re);
+        }
+    done:
+        return ret;
+    }
 
 After each routing operation, zebra_rib_evaluate_rn_nexthops() triggers routes redownloading through NHG backwalk. The backwalk should be stopped at the first NHG that is marked as NEXTHOP_GROUP_RECURSIVE; then Zebra only needs to update the NHG chain affected by the NHG that has undergone changes.
 
