@@ -143,11 +143,10 @@ In order to enable Zebra to "Redownload Routes" without notifying protocol clien
     <figcaption>Figure 3. data structure modification for routes backwalk<figcaption>
 </figure>
 
-
+     
 Functions below initialize the backwalk pointers
 
-static void rib_link(struct route_node *rn, struct route_entry *re, int process)
-{
+static void rib_link(struct route_node *rn, struct route_entry *re, int process) {
 	rib_dest_t *dest;
 	afi_t afi;
 	const char *rmap_name;
@@ -167,8 +166,7 @@ static void rib_link(struct route_node *rn, struct route_entry *re, int process)
         ...	
  }
 
-int route_entry_update_nhe(struct route_entry *re, struct nhg_hash_entry *new_nhghe)
-{
+int route_entry_update_nhe(struct route_entry *re, struct nhg_hash_entry *new_nhghe) {
 	struct nhg_hash_entry *old;
 	int ret = 0;
 
