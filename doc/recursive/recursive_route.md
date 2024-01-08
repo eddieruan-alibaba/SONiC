@@ -124,109 +124,202 @@ The main changes are in the following areas
 - orchagent picks up event from APP DB and trigger NHG programming. Neighorch needs to handle this new schema without change too much on existing codes.
 
 ## Low Level Design
-### Zebra changes
-#### Recursive nexthop change notification
-Consider the case of recursive routes in the following diagram
 
+### Recursive nexthop change notification
+Consider the case of recursive routes in the following diagram
+   
 <figure align=center>
     <img src="images/recursive_routes.jpg" >
     <figcaption>Figure 2. EVPN Underlay recursive routes convergence<figcaption>
-</figure> 
-
-
+</figure>
+	    
 As described in the section "Routes Redownloading" above, if the prefix 100.0.0.1 via 10.1.0.68 is withdrawn from the IGP node, Zebra will explicitly redownload routes twice for recursive convergence with the help of the BGP client, one for the prefix 10.1.0.68 and another for the prefix 2.2.2.2. In this scenario, since the reachability of the prefix 2.2.2.2 remains unchanged and also Zebra has the dependency relationships between recursive NHGs, there is a chance to improve Zebra for fast route convergence by itself.
 
-##### Data Structure Modifications
-In order to enable Zebra to "Redownload Routes" without notifying protocol clients, it should be able to obtain the route node associated with the NHG that has undergone changes. Some pointer fields need to be added in the data structures below
+#### Data Structure Modifications
+In order to enable Zebra to "Redownload Routes" without notifying protocol clients, it should be able to obtain the route node associated with the NHG that has undergone changes. Some pointer fields need to be added in the data structures below.
 
 <figure align=center>
     <img src="images/data_struct.jpg" >
     <figcaption>Figure 3. data structure modification for routes backwalk<figcaption>
 </figure>
 
-###### struct nhg_hash_entry 
-New field struct list *routes in struct nhg_hash_entry, zebra_nhg.h
+##### struct nhg_hash_entry 
+New field struct list *routes in struct nhg_hash_entry
 
-    struct list *routes;
+    struct nhg_hash_entry {
+        ...
 
-###### struct route_entry
-New field struct list *routes in struct route_entry, rib.h
+        struct nhg_connected_tree_head nhg_depends, nhg_dependents;
 
-    struct rib_dest_t_ *pdest;
+        /* List of routes for this nhe. */
+        struct list *routes;
 
-Functions below initialize the backwalk pointers
-
-    static void rib_link(struct route_node *rn, struct route_entry *re, int process)
-    {
-        rib_dest_t *dest;
-        afi_t afi;
-        const char *rmap_name;
-
-        assert(re && rn);
-
-        dest = rib_dest_from_rnode(rn);
-        if (!dest) {
-            if (IS_ZEBRA_DEBUG_RIB_DETAILED)
-                rnode_debug(rn, re->vrf_id, "rn %p adding dest", rn);
-
-            dest = zebra_rib_create_dest(rn);
-        }
-
-        re_list_add_head(&dest->routes, re);
-        re->pdest = dest;
-        ...	
+        ...
     }
-                        
-    int route_entry_update_nhe(struct route_entry *re, struct nhg_hash_entry *new_nhghe)
-    {
-        struct nhg_hash_entry *old;
-        int ret = 0;
 
-        if (new_nhghe == NULL) {
-            if (re->nhe) {
-                if (re->nhe->routes)
-                    listnode_delete(re->nhe->routes, re);
-                    zebra_nhg_decrement_ref(re->nhe);
-                }
-                re->nhe = NULL;
-                goto done;
-        }
+##### struct route_entry
+New field struct list *routes in struct route_entry
 
-        if ((re->nhe_id != 0) && re->nhe && (re->nhe != new_nhghe)) {
-            old = re->nhe;
+    struct route_entry {       
+        ...
 
-            route_entry_attach_ref(re, new_nhghe);
-            if (!new_nhghe->routes)
-                new_nhghe->routes = list_new();
-            listnode_add(new_nhghe->routes, re);
-            if (old) {
-                if (old->routes)
-                    listnode_delete(old->routes, re);
-                zebra_nhg_decrement_ref(old);
+        /* dest referring to this re */
+        struct rib_dest_t_ *pdest;
+
+        ...
+    }
+
+Functions below initialize the backwalk pointers.
+``` c
+static void rib_link(struct route_node *rn, struct route_entry *re, int process)
+{
+    rib_dest_t *dest;
+    afi_t afi;
+    const char *rmap_name;
+
+    ...
+
+    re_list_add_head(&dest->routes, re);
+    re->pdest = dest;
+
+    ...	
+}
+```
+
+``` c
+int route_entry_update_nhe(struct route_entry *re, struct nhg_hash_entry *new_nhghe)
+{
+    struct nhg_hash_entry *old;
+    int ret = 0;
+
+    if (new_nhghe == NULL) {
+        if (re->nhe) {
+            if (re->nhe->routes)
+                listnode_delete(re->nhe->routes, re);
+                zebra_nhg_decrement_ref(re->nhe);
             }
-        } else if (!re->nhe) {
-            /* This is the first time it's being attached */
-            route_entry_attach_ref(re, new_nhghe);
-            if (!new_nhghe->routes)
-                new_nhghe->routes = list_new();
-            listnode_add(new_nhghe->routes, re);
-        }
-    done:
-        return ret;
+            re->nhe = NULL;
+            goto done;
     }
 
-After each routing operation, zebra_rib_evaluate_rn_nexthops() triggers routes redownloading through NHG backwalk. The backwalk should be stopped at the first NHG that is marked as NEXTHOP_GROUP_RECURSIVE; then Zebra only needs to update the NHG chain affected by the NHG that has undergone changes.
+    if ((re->nhe_id != 0) && re->nhe && (re->nhe != new_nhghe)) {
+        old = re->nhe;
+
+        route_entry_attach_ref(re, new_nhghe);
+        if (!new_nhghe->routes)
+            new_nhghe->routes = list_new();
+        listnode_add(new_nhghe->routes, re);
+        if (old) {
+            if (old->routes)
+                listnode_delete(old->routes, re);
+            zebra_nhg_decrement_ref(old);
+        }
+    } else if (!re->nhe) {
+        /* This is the first time it's being attached */
+        route_entry_attach_ref(re, new_nhghe);
+        if (!new_nhghe->routes)
+            new_nhghe->routes = list_new();
+        listnode_add(new_nhghe->routes, re);
+    }
+done:
+    return ret;
+}
+```
 
 <figure align=center>
     <img src="images/backwalk.jpg" >
     <figcaption>Figure 4. routes backwalk update<figcaption>
 </figure>
 
+##### struct hash *nhgs_ctx_hash
 
-#### Dataplane refresh for Nexthop group change
+zebra_rib_evaluate_rn_nexthops() triggers routes redownloading through NHG backwalk. Without the assistance of protocol clients, a method needs to be introduced for looking up NHG based on the prefix of the nht list. e.g. Finding NHG based on the prefix 100.0.0.1.Add a new hash table *nhgs_ctx_hash in struct zebra_router to accomplish this task.
+
+    struct zebra_router {
+        ...
+
+        /* The hash of nexthop groups ctx associated with this router */
+        struct hash *nhgs_ctx_hash;
+
+        ...
+    }
+
+the hash stores the mapping information from the prefix to the corresponding NHG. zebra_nhg_insert_nhe_ctx() is invoked each time a new NHG is created in zebra_nhe_find(). Only the recursive NHG is inserted into the hash.
+
+``` C
+static bool zebra_nhe_find(struct nhg_hash_entry **nhe, /* return value */
+               struct nhg_hash_entry *lookup,
+               struct nhg_connected_tree_head *nhg_depends,
+               afi_t afi, bool from_dplane)
+{
+    bool created = false;
+    bool recursive = false;
+    struct nhg_hash_entry *newnhe, *backup_nhe;
+    struct nexthop *nh = NULL;
+
+    ...
+
+done:
+    /* Reset time since last update */
+    (*nhe)->uptime = monotime(NULL);
+
+    if (created)
+        zebra_nhg_insert_nhe_ctx(newnhe);
+
+    return created;
+}
+```
+
+``` c
+static int zebra_nhg_insert_nhe_ctx(struct nhg_hash_entry *nhe)
+{
+    struct nhe_ctx lookup;
+    struct nhe_ctx *exist = NULL;
+
+    if (!nhe || !nhe->id)
+        return -1;
+
+    if (nhe->nhg.nexthop->next || (nhe->nhg.nexthop->type != NEXTHOP_TYPE_IPV4
+        && nhe->nhg.nexthop->type != NEXTHOP_TYPE_IPV6)) {
+        if (IS_ZEBRA_DEBUG_NHG)
+            zlog_debug("%s: Skip NHG id (%u), vrf %s",
+                __func__, nhe->id, vrf_id_to_name(nhe->nhg.nexthop->vrf_id));
+        return -1;
+    }
+
+    lookup.nhe_id = nhe->id;
+    lookup.vrf_id = nhe->nhg.nexthop->vrf_id;
+    lookup.nh_type = nhe->nhg.nexthop->type;
+    lookup.gate = nhe->nhg.nexthop->gate;
+
+    exist = hash_lookup(zrouter.nhgs_ctx_hash, &lookup);
+
+    if (exist && exist->nhe_id != nhe->id) {
+        if (IS_ZEBRA_DEBUG_NHG)
+            zlog_debug("%s: NHG id (%u), vrf %s => NHG id (%u), vrf %s",
+                __func__, exist->nhe_id, vrf_id_to_name(exist->vrf_id),
+                nhe->id, vrf_id_to_name(exist->vrf_id));
+
+        exist->nhe_id = nhe->id;
+        return 0;
+    }
+
+    hash_get(zrouter.nhgs_ctx_hash, &lookup, zebra_nhg_ctx_hash_alloc);
+
+    ...
+}
+```
+#### How the backwalk starts and ends
+As illustrated in Figure 4, the process of the walkback begins as follows.
+
+The backwalk should be stopped at the first NHG that is marked as NEXTHOP_GROUP_RECURSIVE; then Zebra only needs to update the NHG chain affected by the NHG that has undergone changes.
+
+The backwalk should be stopped at the first NHG that is marked as NEXTHOP_GROUP_RECURSIVE; then Zebra only needs to update the NHG chain affected by the NHG that has undergone changes.
+
+### Dataplane refresh for Nexthop group change
 TODO:
 
-#### FPM's new schema for recursive NHG
+### FPM's new schema for recursive NHG
 TODO
 
 ### Orchagent changes
