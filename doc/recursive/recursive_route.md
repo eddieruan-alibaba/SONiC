@@ -176,7 +176,7 @@ Functions below initialize the backwalk pointers
         re->pdest = dest;
         ...	
     }
-
+                        
     int route_entry_update_nhe(struct route_entry *re, struct nhg_hash_entry *new_nhghe)
     {
         struct nhg_hash_entry *old;
