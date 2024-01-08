@@ -88,9 +88,10 @@ zebra_rib_evaluate_rn_nexthops() leverage the above list to trigger each dependi
 It starts from the incoming route node (rn) and retrieves its nht (NextHop Track) list. Then, it iterates through each prefix in the nht list, utilizing the prefix to invoke zebra_evaluate_rnh(). This function implements the functionality of NHG updating.
 
 When zebra triggers NHG update:
-1. Zebra rib process(route add/del/update).
+1. Zebra rib process.
 2. Dplane process complete.
 3. Dplane route notify is received.
+4. zfpm route updates.
 
 ### Zebra triggers routes redownloading from protocol process
 Routes redownloading is triggered at the end of zebra_rib_evaluate_rn_nexthops(). Its main process is as follows:
@@ -143,7 +144,17 @@ In order to enable Zebra to "Redownload Routes" without notifying protocol clien
     <figcaption>Figure 3. data structure modification for routes backwalk<figcaption>
 </figure>
 
+###### struct nhg_hash_entry 
+New field struct list *routes in struct nhg_hash_entry, zebra_nhg.h
 
+/* List of routes for this nhe. */
+struct list *routes;
+
+###### struct route_entry
+New field struct list *routes in struct route_entry, rib.h
+
+/* dest referring to this re */
+struct rib_dest_t_ *pdest;
 
 Functions below initialize the backwalk pointers
 
