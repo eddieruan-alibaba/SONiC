@@ -147,12 +147,12 @@ In order to enable Zebra to "Redownload Routes" without notifying protocol clien
 ###### struct nhg_hash_entry 
 New field struct list *routes in struct nhg_hash_entry, zebra_nhg.h
 
-struct list *routes;
+    struct list *routes;
 
 ###### struct route_entry
 New field struct list *routes in struct route_entry, rib.h
 
-struct rib_dest_t_ *pdest;
+    struct rib_dest_t_ *pdest;
 
 Functions below initialize the backwalk pointers
 
