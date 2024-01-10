@@ -132,14 +132,26 @@ The main changes are in the following areas
 ## Low Level Design
 
 ### Recursive nexthop change notification
-Consider the case of recursive routes
-   
-<figure align=center>
-    <img src="images/recursive_routes.jpg" >
-    <figcaption>Figure 2. EVPN Underlay recursive routes convergence<figcaption>
-</figure>
-	    
-As described in the section "Routes Redownloading" above, if the prefix 100.0.0.1 via 10.1.0.68 is withdrawn from the IGP node, Zebra will explicitly redownload routes twice for recursive convergence with the help of the BGP client, one for the prefix 10.1.0.68 and another for the prefix 2.2.2.2. In this scenario, since the reachability of the prefix 2.2.2.2 remains unchanged and also Zebra has the dependency relationships between recursive NHGs, there is a chance to improve Zebra for fast route convergence by itself.
+Consider the case of recursive routes for EVPN underlay
+
+    B>  2.2.2.2/32 [200/0] (127) via 100.0.0.1 (recursive), weight 1, 00:00:02
+      *                            via 10.1.0.5, Ethernet2, weight 1, 00:00:02
+      *                            via 10.1.0.66, Ethernet2, weight 1, 00:00:02
+      *                            via 10.1.0.67, Ethernet2, weight 1, 00:00:02
+                                 via 200.0.0.1 (recursive), weight 1, 00:00:02
+      *                            via 10.1.0.76, Ethernet2, weight 1, 00:00:02
+      *                            via 10.1.0.77, Ethernet2, weight 1, 00:00:02
+      *                            via 10.1.0.78, Ethernet2, weight 1, 00:00:02
+    B>* 100.0.0.0/24 [200/0] (123) via 10.1.0.5, Ethernet2, weight 1, 00:00:02
+      *                            via 10.1.0.66, Ethernet2, weight 1, 00:00:02
+      *                            via 10.1.0.67, Ethernet2, weight 1, 00:00:02
+    B>* 200.0.0.0/24 [200/0] (108) via 10.1.0.76, Ethernet2, weight 1, 00:00:53
+      *                            via 10.1.0.77, Ethernet2, weight 1, 00:00:53
+      *                            via 10.1.0.78, Ethernet2, weight 1, 00:00:53
+
+As described in the section "Routes Redownloading" above, if IGP node 10.1.0.68 for prefix 100.0.0.1 becomes unreachable, Zebra will explicitly redownload routes twice for recursive convergence with the help of the BGP client, one for the prefix 10.1.0.68 and another for the prefix 2.2.2.2.
+
+In this scenario, since the reachability of the prefix 2.2.2.2 remains unchanged and also Zebra has the dependency relationships between recursive NHGs, there is a chance to improve Zebra for fast route convergence by itself.
 
 #### Data Structure Modifications
 In order to enable Zebra to "Redownload Routes" without notifying protocol clients, it should be able to obtain the route node associated with the NHG that has undergone changes. Some pointer fields need to be added.
@@ -234,7 +246,9 @@ done:
 
 ##### struct hash *nhgs_ctx_hash
 
-zebra_rib_evaluate_rn_nexthops() triggers routes redownloading through NHG backwalk. Without the assistance of protocol clients, a method needs to be introduced for looking up NHG based on the prefix of the NHT list. e.g. Finding NHG based on the prefix 100.0.0.1. Add a new hash table *nhgs_ctx_hash in struct zebra_router to accomplish this task.
+zebra_rib_evaluate_rn_nexthops() triggers routes redownloading through NHG backwalk. Without the assistance of protocol clients, a method needs to be introduced for looking up NHG based on the prefix of the NHT list. e.g. Finding NHG based on the prefix 100.0.0.1.
+
+Add a new hash table *nhgs_ctx_hash in struct zebra_router to accomplish this task.
 
     struct zebra_router {
         ...
@@ -245,7 +259,7 @@ zebra_rib_evaluate_rn_nexthops() triggers routes redownloading through NHG backw
         ...
     }
 
-the hash stores the mapping information from the NHT prefix to the corresponding NHG. zebra_nhg_insert_nhe_ctx() is invoked each time a new NHG is created in zebra_nhe_find(). Only the recursive NHG is inserted into the hash.
+The hash stores the mapping information from the NHT prefix to the corresponding recursive NHG. zebra_nhg_insert_nhe_ctx() is invoked each time a new NHG is created in zebra_nhe_find(). Only the recursive one is inserted into the hash.
 
 ``` C
 static bool zebra_nhe_find(struct nhg_hash_entry **nhe, /* return value */
@@ -321,7 +335,7 @@ The backwalk starts when zebra_rib_evaluate_rn_nexthops() function is called. It
 
 This retains the original approach of Zebra for updating the resolve state of each route in the backwalk chain, so the backwalk will continue until prefix 2.2.2.2.
 
-However, at the Dplane/FPM level, there is no need to refresh the recursive NHG for prefix 2.2.2.2 again, since the reachability of its NHG hasn't changed, and the recursive NHG's ID should remain unchanged.
+However, at the Dplane/FPM level, there is no need to refresh the recursive NHG for prefix 2.2.2.2 again, since the reachability of it hasn't changed, and the recursive NHG's ID should remain unchanged.
 
 <figure align=center>
     <img src="images/nhg_id.jpg" >
