@@ -10,12 +10,12 @@
 ## Table of Content
 - [Goal and Scope](#goal-and-scope)
   - [FRR's Current Limitations](#frrs-current-limitations)
+- [Triggers Events](#triggers-events)
 - [FRR Current Approaches](#frr-current-approaches)
   - [NH dependency tree](#nh-dependency-tree)
   - [NHT list from route node](#nht-list-from-route-node)
   - [zebra\_rib\_evaluate\_rn\_nexthops](#zebra_rib_evaluate_rn_nexthops)
   - [Zebra triggers routes redownloading from protocol process](#zebra-triggers-routes-redownloading-from-protocol-process)
-- [Triggers Events](#triggers-events)
 - [High Level Design](#high-level-design)
 - [Low Level Design](#low-level-design)
   - [Recursive nexthop change notification](#recursive-nexthop-change-notification)
@@ -47,11 +47,25 @@ This leads an issue discussed in the SONiC Routing Working Group (https://lists.
     <figcaption>Figure 1. Alibaba issue Underlay routes flap affecting Overlay SRv6 routes <figcaption>
 </figure> 
 
-The enhancement is discussed in https://datatracker.ietf.org/doc/draft-ietf-rtgwg-bgp-pic/. This HLD is outline an approach which could prevent BGP load balancing updates from being triggered by IGP load balancing updates. This is essentially the recursive VPN route support. 
+To solve this issue, we need to introduce Prefix Independent Convergence (PIC) to FRR/SONiC. PIC concept is described in IEFT https://datatracker.ietf.org/doc/draft-ietf-rtgwg-bgp-pic/. It is not a BGP feature, but a RIB/FIB feeature on the device. PIC has two basic concept, PIC core and PIC edge. The following HLD focuses on PIC edge's enhancement https://datatracker.ietf.org/doc/draft-ietf-rtgwg-bgp-pic/. This HLD is outline an approach which could prevent BGP load balancing updates from being triggered by IGP load balancing updates, a.k.a PIC core approach for the recursive VPN route support. 
 
 Note: 
 - This HLD only focus on recursive VPN routes support. Since SONiC doesn't have MPLS VPN support in master, the testing would focus on EVPN and SRv6 VPN only. 
 - The similar approach could be applied to global table's recursive routes support. But that requires SAI APIs. Therefore, global table's recursive routes support is not in the scope of this HLD.
+
+## Triggers Events
+Here are a list of trigger events which we want to take care for getting faster routes convergence and minimizing hardware traffic loss. 
+
+| Trigger Types |     Events    |       Possible handling          | 
+|:---|:-----------|:----------------------|
+| IGP local failure | A local link goes down | From RIB point of view, local interface routes would be removed. From this event, zebra_rib_evaluate_rn_nexthops() would be triggered. It is the PIC core handling case. This path has the same functionality as current orchagent quick fix up approach. |
+| IGP remote failture | A remote link goes down, IGP leaf's reachability is not changed, only IGP paths are updated. | IGP updates IGP leaf's NHG. No need to trigger BGP update since reachability is not changed. The handling would via zebra_rib_evaluate_rn_nexthops(). It is the PIC core handling case. |
+| IGP remote failure  | A remote IGP node failure or a remote IGP node is unreachable. But the remote PE route could be re-resolved via a new IGP path | IGP triggers IGP leaf delete event, which triggers zebra_rib_evaluate_rn_nexthops(). Since remote PE is still reachable, it is the PIC core handling case. |
+| IGP remote failure  | A remote PE node failure or a remote PE node is unreachable | IGP triggers IGP leaf delete event, which triggers zebra_rib_evaluate_rn_nexthops(). This is the PIC edge handling case. |
+| BGP remote failure  | BGP remote node down | It should be detected by IGP remote node down first before BGP reacts, a.k.a the same as the above steps. This is the PIC edge handling case |
+| BGP remote failure | Remote BGP does not response, remote PE is still available. | BGP will trigger leaf updates. It is a BGP bug situation in deployment and handled via BGP convergence. It is not in PIC's scope |
+| BGP local failure | local BGP does not response.| It is a BGP bug situation in deployment and handled via BGP convergence. It is not in PIC's scope |
+
 
 ## FRR Current Approaches
 ### NH dependency tree
@@ -109,19 +123,6 @@ Routes redownloading is triggered at the end of zebra_rib_evaluate_rn_nexthops()
 5. Pass the route to rib process.
 6. Call zebra_rib_evaluate_rn_nexthops(), then go to step 1. This loop procedure builds/refreshes the recursive route chain.
 
-## Triggers Events
-Here are a list of trigger events which we want to take care for getting faster routes convergence and minimizing hardware traffic loss. 
-
-| Trigger Types |     Events    |       Possible handling          | 
-|:---|:-----------|:----------------------|
-| IGP local failure | A local link goes down | Local interface routes would be removed. From this event, zebra_rib_evaluate_rn_nexthops() would be triggered. |
-| IGP remote failture | A remote link goes down, IGP leaf's reachability is not changed, only IGP paths are updated. | IGP updates IGP leaf's NHG. No need to trigger BGP update since reachability is not changed. The handling would via zebra_rib_evaluate_rn_nexthops(). It is recursive route handling case. |
-| IGP remote failure  | A remote IGP node failure or a remote IGP node is unreachable. But the remote PE route could be re-resolved via a new IGP path | IGP triggers IGP leaf delete event, which triggers zebra_rib_evaluate_rn_nexthops(). Since remote PE is still reachable, it is recursive route handling case. |
-| IGP remote failure  | A remote PE node failure or a remote PE node is unreachable | IGP triggers IGP leaf delete event, which triggers zebra_rib_evaluate_rn_nexthops(). This is the PIC handling case. |
-| BGP remote failure  | BGP remote node down | It should be detected by IGP remote node down first before BGP reacts. This is the PIC handling case |
-| BGP remote failure | Remote BGP does not response, remote PE is still available. | BGP will trigger leaf updates. It is a BGP bug situation in deployment and not in this HLD's scope |
-| BGP local failure | local BGP does not response.| It is a BGP bug situation in deployment and not in this HLD's scope |
-
 ## High Level Design
 The main changes are in the following areas
 
@@ -149,12 +150,12 @@ Consider the case of recursive routes for EVPN underlay
       *                            via 10.1.0.77, Ethernet2, weight 1, 00:00:53
       *                            via 10.1.0.78, Ethernet2, weight 1, 00:00:53
 
-As described in the section "Routes Redownloading" above, if IGP node 10.1.0.68 for prefix 100.0.0.1 becomes unreachable, Zebra will explicitly redownload routes twice for recursive convergence with the help of the BGP client, one for the prefix 10.1.0.68 and another for the prefix 2.2.2.2.
+As described in the section "Routes Redownloading" above, if IGP node 10.1.0.68 for prefix 100.0.0.1 becomes unreachable, Zebra will explicitly redownload both routes for recursive convergence with the help of the BGP client, one for the prefix 10.1.0.68 and another for the prefix 2.2.2.2.
 
-In this scenario, since the reachability of the prefix 2.2.2.2 remains unchanged and also Zebra has the dependency relationships between recursive NHGs, there is a chance to improve Zebra for fast route convergence by itself.
+In this scenario, since the reachability of the prefix 2.2.2.2 remains unchanged and also Zebra has the dependency relationships between recursive NHGs, there is a chance to improve Zebra for fast route convergence by itself via providing updated NHG information directly.
 
 #### Data Structure Modifications
-In order to enable Zebra to "Redownload Routes" without notifying protocol clients, it should be able to obtain the route node associated with the NHG that has undergone changes. Some pointer fields need to be added.
+In order to enable Zebra to "Redownload Routes" without notifying protocol clients, it should be able to obtain the route node associated with the NHG that has undergone changes. Some pointer fields need to be added. (?? TODO do we really need it??)
 
 <figure align=center>
     <img src="images/data_struct.jpg" >
@@ -362,4 +363,5 @@ TODO
 
 ## References
 - https://github.com/sonic-net/SONiC/pull/1425
+- https://datatracker.ietf.org/doc/draft-ietf-rtgwg-bgp-pic/
 - https://github.com/eddieruan-alibaba/SONiC/blob/eruan-pic/doc/bgp_pic/bgp_pic.md
