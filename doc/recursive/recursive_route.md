@@ -270,16 +270,16 @@ If the local interface Ethernet6 is down or the route "200.0.0.0/24 via 10.1.0.7
 
 <figure align=center>
     <img src="images/route_delete.jpg" >
-    <figcaption>Figure 6. route deletion<figcaption>
+    <figcaption>Figure 6. rib deletion<figcaption>
 </figure>
 
-Route deletion is handled in rib_process(), then zebra_rnh_refresh_dependents() also handles route withdrawal case.
+Rib deletion for interface down or route withdrawal is handled in rib_process(), then zebra_rnh_refresh_dependents() also handles route withdrawal case.
 
 #### Data Structure Modifications
-No data structure modification is required as it leverages Zebra's NHG dependents chain.
+No Zebra original data structure modification is required as it leverages Zebra's NHG dependents chain.
 
 #### Fast Convergence Handling
-TODO
+Fast convergence for route withdrawal is also handled in the zebra_rnh_refresh_dependents(). The detailed is in the next section.
 
 ### The Handling of zebra_rnh_refresh_dependents()
 TODO
