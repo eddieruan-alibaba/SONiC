@@ -126,7 +126,7 @@ The main enhancements are in the following areas
 
 ## Low Level Design
 
-### Replay of Routes Updating
+### Routes Updating
 Consider the case of recursive routes for EVPN underlay
 
     B>  2.2.2.2/32 [200/0] (127) via 100.0.0.1 (recursive), weight 1, 00:00:02
