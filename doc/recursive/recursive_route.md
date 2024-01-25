@@ -154,7 +154,7 @@ In order to enable Zebra to update routes without notifying protocol clients, it
 
 <figure align=center>
     <img src="images/data_struct.jpg" >
-    <figcaption>Figure 3. data structure modification for routes update<figcaption>
+    <figcaption>Figure 2. data structure modification for routes update<figcaption>
 </figure>
 
 ##### struct nhg_hash_entry 
@@ -325,7 +325,7 @@ The newly added zebra_rnh_refresh_dependents() handles the routes updating, repl
 
 <figure align=center>
     <img src="images/backwalk_functions.jpg" >
-    <figcaption>Figure 4. routes updating function<figcaption>
+    <figcaption>Figure 3. routes updating function<figcaption>
 </figure>
 
 The replay of routes updating starts when zebra_rib_evaluate_rn_nexthops() function is called and should be stopped when the route node's NHT list is empty. In other words, there are no nexthops resolving depending on this route node. It retains the original approach of Zebra for updating the resolve state of each route, so the handling will continue until prefix 2.2.2.2.
@@ -352,7 +352,7 @@ If the local interface Ethernet6 is down or the route "200.0.0.0/24 via 10.1.0.7
 
 <figure align=center>
     <img src="images/route_delete.jpg" >
-    <figcaption>Figure 6. rib deletion<figcaption>
+    <figcaption>Figure 4. rib deletion<figcaption>
 </figure>
 
 Rib deletion for interface down or route withdrawal is handled in rib_process(), then zebra_rnh_refresh_dependents() also handles route withdrawal case.
@@ -364,7 +364,10 @@ No Zebra original data structure modification is required as it leverages Zebra'
 Fast convergence for route withdrawal is also handled in the zebra_rnh_refresh_dependents(). The detailed is in the next section.
 
 ### The Handling of zebra_rnh_refresh_dependents()
-TODO
+<figure align=center>
+    <img src="images/zebra_rnh_refresh_dependents.jpg" >
+    <figcaption>Figure 5. zebra_rnh_refresh_dependents()<figcaption>
+</figure>
 
 ### Dataplane refresh for Nexthop group change
 TODO
