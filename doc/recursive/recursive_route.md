@@ -364,9 +364,23 @@ No Zebra original data structure modification is required as it leverages Zebra'
 Fast convergence for route withdrawal is also handled in the zebra_rnh_refresh_dependents(). The detailed is in the next section.
 
 ### The Handling of zebra_rnh_refresh_dependents()
+
+This new function is inserted into the existing route convergence process, allowing Zebra to autonomously achieve route convergence in the case where the reachability of recursive routes remains unchanged.
+
+Provide a brief description of Zebra's original recursive convergence process.
+
+<figure align=center>
+    <img src="images/route_converge_original.jpg" >
+    <figcaption>Figure 5. route convergence process<figcaption>
+</figure>
+
+Route/Nexthop dependents are built or refreshed from the bottom up with each invocation of zebra_rnh_eval_nexthop_entry().
+
+After the insertion of zebra_rnh_refresh_dependents into the original recursive convergence process.
+
 <figure align=center>
     <img src="images/zebra_rnh_refresh_dependents.jpg" >
-    <figcaption>Figure 5. zebra_rnh_refresh_dependents()<figcaption>
+    <figcaption>Figure 6. zebra_rnh_refresh_dependents()<figcaption>
 </figure>
 
 ### Dataplane refresh for Nexthop group change
