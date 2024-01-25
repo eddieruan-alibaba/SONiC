@@ -383,8 +383,10 @@ After the insertion of zebra_rnh_refresh_dependents into the original recursive 
     <figcaption>Figure 6. zebra_rnh_refresh_dependents()<figcaption>
 </figure>
 
+The route convergence logic in the red will be replaced by the blue section.
+
 ### Dataplane refresh for Nexthop group change
-TODO
+The dataplane remains unchanged as it has its own convergence logic.
 
 ### FPM's new schema for recursive NHG
 TODO
