@@ -398,11 +398,11 @@ After the insertion of zebra_rnh_refresh_dependents into the original recursive 
 
 The route convergence logic in the red will be replaced by the blue section.
 
+In step 1.7/2.4, a new flag ROUTE_ENTRY_NHG_ID_PRESERVED added in struct route_entry. The flag is set if the associated nhe's reachability is unchanged, after that rib_process() skip the routes which has this flag.
+
 ### Dataplane refresh for Nexthop group change
 As the recursive NHG ID remains unchanged, Zebra is able to bypass forwarding this route to Dplane/FPM. In other words, the backwalk in Dplane/FPM terminates at the recursive NHG route.
 Data Structure Modifications
-
-TODO: Add a status flag ROUTE_ENTRY_NHG_ID_PRESERVED in struct route_entry? rib_process_update_fib() skip the routes with this flag?
 
 ### FPM's new schema for recursive NHG
 We rely on BRCM and NTT's NHG changes.
