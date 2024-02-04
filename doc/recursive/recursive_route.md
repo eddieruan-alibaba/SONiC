@@ -328,7 +328,12 @@ The newly added zebra_rnh_refresh_dependents() handles the routes updating, repl
     <figcaption>Figure 3. routes updating function<figcaption>
 </figure>
 
-The replay of routes updating starts when zebra_rib_evaluate_rn_nexthops() function is called and should be stopped when the route node's NHT list is empty. In other words, there are no nexthops resolving depending on this route node. It retains the original approach of Zebra for updating the resolve state of each route, so the handling will continue until prefix 2.2.2.2.
+The replay of routes updating starts when zebra_rib_evaluate_rn_nexthops() function is called and should be stopped when the route node's NHT list is empty. In other words, there are no nexthops resolving depending on this route node. It retains the original approach of Zebra for updating the resolve state of each route, so the handling will continue until prefix 2.2.2.2. However, at dplane/fpm level, there is no need to refresh the recursive NHG for prefix 2.2.2.2 again, since the reachability of it hasn't changed, and the ID of this recursive NHG should remain unchanged.
+
+<figure align=center>
+    <img src="images/nhg_id_change.jpg" >
+    <figcaption>Figure 4. NHG ID change for route convergence<figcaption>
+</figure>
 
 ### Fast Convergence for Route Withdrawal
 As the case of recursive routes for EVPN underlay
@@ -352,7 +357,7 @@ If the local interface Ethernet6 is down or the route "200.0.0.0/24 via 10.1.0.7
 
 <figure align=center>
     <img src="images/route_delete.jpg" >
-    <figcaption>Figure 4. rib deletion<figcaption>
+    <figcaption>Figure 5. rib deletion<figcaption>
 </figure>
 
 Rib deletion for interface down or route withdrawal is handled in rib_process(), then zebra_rnh_refresh_dependents() also handles route withdrawal case.
@@ -371,7 +376,7 @@ Provide a brief description of Zebra's original recursive convergence process.
 
 <figure align=center>
     <img src="images/route_converge_original.jpg" >
-    <figcaption>Figure 5. route convergence process<figcaption>
+    <figcaption>Figure 6. route convergence process<figcaption>
 </figure>
 
 Route/Nexthop dependents are built or refreshed from the bottom up with each invocation of zebra_rnh_eval_nexthop_entry().
@@ -380,7 +385,7 @@ After the insertion of zebra_rnh_refresh_dependents into the original recursive 
 
 <figure align=center>
     <img src="images/zebra_rnh_refresh_dependents.jpg" >
-    <figcaption>Figure 6. zebra_rnh_refresh_dependents()<figcaption>
+    <figcaption>Figure 7. zebra_rnh_refresh_dependents()<figcaption>
 </figure>
 
 The route convergence logic in the red will be replaced by the blue section.
