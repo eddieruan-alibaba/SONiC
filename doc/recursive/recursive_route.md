@@ -31,6 +31,12 @@
   - [FPM's new schema for recursive NHG](#fpms-new-schema-for-recursive-nhg)
   - [Orchagent changes](#orchagent-changes)
 - [Unit Test](#unit-test)
+  - [Normal Case's Forwarding Chain Information](#normal-cases-forwarding-chain-information)
+  - [Test Case 1: local link failure](#test-case-1-local-link-failure)
+  - [Test Case 2: IGP remote link/node failure](#test-case-2-igp-remote-linknode-failure)
+  - [Test Case 3: IGP remote PE failure](#test-case-3-igp-remote-pe-failure)
+  - [Test Case 4: BGP remote PE node failure](#test-case-4-bgp-remote-pe-node-failure)
+  - [Test Case 5: Remote PE-CE link failure](#test-case-5-remote-pe-ce-link-failure)
 - [References](#references)
 
 ## Goal and Scope
