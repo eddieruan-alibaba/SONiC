@@ -335,6 +335,8 @@ The replay of routes updating starts when zebra_rib_evaluate_rn_nexthops() funct
     <figcaption>Figure 4. NHG ID change for route convergence<figcaption>
 </figure>
 
+TODO: How to keep the NHG ID unchanged for a recursive NHG? in zebra_nhe_find()?
+
 ### Fast Convergence for Route Withdrawal
 As the case of recursive routes for EVPN underlay
 
@@ -391,18 +393,56 @@ After the insertion of zebra_rnh_refresh_dependents into the original recursive 
 The route convergence logic in the red will be replaced by the blue section.
 
 ### Dataplane refresh for Nexthop group change
-The dataplane remains unchanged as it has its own convergence logic.
+As the recursive NHG ID remains unchanged, Zebra is able to bypass forwarding this route to Dplane/FPM. In other words, the backwalk in Dplane/FPM terminates at the recursive NHG route.
+Data Structure Modifications
+
+TODO: Add a status flag ROUTE_ENTRY_NHG_ID_PRESERVED in struct route_entry? rib_process_update_fib() skip the routes with this flag?
 
 ### FPM's new schema for recursive NHG
-TODO
+We rely on BRCM and NTT's NHG changes.
 
 ### Orchagent changes
-TODO
+We rely on BRCM and NTT's NHG changes.
 
 ## Unit Test
-TODO
+### Normal Case's Forwarding Chain Information
+### Test Case 1: local link failure
+<figure align=center>
+    <img src="images/testcase1.png" >
+    <figcaption>Figure 8.local link failure <figcaption>
+</figure>
+
+### Test Case 2: IGP remote link/node failure
+<figure align=center>
+    <img src="images/testcase2.png" >
+    <figcaption>Figure 9. IGP remote link/node failure
+ <figcaption>
+</figure>
+
+### Test Case 3: IGP remote PE failure
+<figure align=center>
+    <img src="images/testcase3.png" >
+    <figcaption>Figure 10. IGP remote PE failure
+ <figcaption>
+</figure>
+
+### Test Case 4: BGP remote PE node failure
+<figure align=center>
+    <img src="images/testcase4.png" >
+    <figcaption>Figure 11. BGP remote PE node failure
+ <figcaption>
+</figure>
+
+### Test Case 5: Remote PE-CE link failure
+<figure align=center>
+    <img src="images/testcase5.png" >
+    <figcaption>Figure 12. Remote PE-CE link failure
+ <figcaption>
+</figure>
+
 
 ## References
 - https://github.com/sonic-net/SONiC/pull/1425
 - https://datatracker.ietf.org/doc/draft-ietf-rtgwg-bgp-pic/
+- https://github.com/sonic-net/SONiC/blob/master/doc/pic/bgp_pic_arch_doc.md
 - https://github.com/eddieruan-alibaba/SONiC/blob/eruan-pic/doc/bgp_pic/bgp_pic.md
