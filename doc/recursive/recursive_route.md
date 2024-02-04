@@ -1,7 +1,7 @@
 <!-- omit in toc -->
 # Recursive Route Handling HLD
 <!-- omit in toc -->
-### Revision
+## Revision
 | Rev |     Date    |       Author           | Change Description                |
 |:---:|:-----------:|:----------------------:|-----------------------------------|
 | 0.1 | Oct    2023 |                        | Initial Draft                     |
@@ -9,27 +9,28 @@
 <!-- omit in toc -->
 ## Table of Content
 - [Goal and Scope](#goal-and-scope)
-  - [FRR's Current Limitations](#frrs-current-limitations)
+- [FRR's Current Limitations](#frrs-current-limitations)
 - [Triggers Events](#triggers-events)
 - [FRR Current Approaches](#frr-current-approaches)
-  - [NH dependency tree](#nh-dependency-tree)
-  - [NHT list from route node](#nht-list-from-route-node)
-  - [zebra\_rib\_evaluate\_rn\_nexthops](#zebra_rib_evaluate_rn_nexthops)
-  - [Zebra triggers routes redownloading from protocol process](#zebra-triggers-routes-redownloading-from-protocol-process)
+  - [NH Dependency Tree](#nh-dependency-tree)
+  - [NHT List from Route Node](#nht-list-from-route-node)
+  - [NHG Update Trigger](#nhg-update-trigger)
 - [High Level Design](#high-level-design)
 - [Low Level Design](#low-level-design)
-  - [Recursive nexthop change notification](#recursive-nexthop-change-notification)
+  - [Routes Updating](#routes-updating)
     - [Data Structure Modifications](#data-structure-modifications)
       - [struct nhg\_hash\_entry](#struct-nhg_hash_entry)
       - [struct route\_entry](#struct-route_entry)
       - [struct hash \*nhgs\_ctx\_hash](#struct-hash-nhgs_ctx_hash)
-    - [How the backwalk starts and ends](#how-the-backwalk-starts-and-ends)
+    - [Routes Updating Handling](#routes-updating-handling)
+  - [Fast Convergence for Route Withdrawal](#fast-convergence-for-route-withdrawal)
     - [Data Structure Modifications](#data-structure-modifications-1)
+    - [Fast Convergence Handling](#fast-convergence-handling)
+  - [The Handling of zebra\_rnh\_refresh\_dependents()](#the-handling-of-zebra_rnh_refresh_dependents)
   - [Dataplane refresh for Nexthop group change](#dataplane-refresh-for-nexthop-group-change)
-    - [Data Structure Modifications](#data-structure-modifications-2)
   - [FPM's new schema for recursive NHG](#fpms-new-schema-for-recursive-nhg)
   - [Orchagent changes](#orchagent-changes)
-- [Unit Tests](#unit-tests)
+- [Unit Test](#unit-test)
   - [Normal Case's Forwarding Chain Information](#normal-cases-forwarding-chain-information)
   - [Test Case 1: local link failure](#test-case-1-local-link-failure)
   - [Test Case 2: IGP remote link/node failure](#test-case-2-igp-remote-linknode-failure)
@@ -41,10 +42,10 @@
 ## Goal and Scope
 A recursive route is a routing mechanism in which the routing decision for a specific destination is determined by referring to another routing table, which is then looked up recursively until a final route is resolved. Recursive routing is a key concept in routing protocols and is often used in complex network topologies to ensure that data reaches its intended destination, even when that destination is not directly reachable from the originating device. In many cases, recursive routes are used in VPN or tunneling scenarios.
 
-### FRR's Current Limitations
-FRR zebra uses struct nexthop to track next hop information. If it is a recursive nexthop, its flags field would be set NEXTHOP_FLAG_RECURSIVE bit and its resolved field stores a pointer which points a list of nexthops obtained by recursive resolution. Therefore zebra keeps hierarchical relationships on the recursive nexthops. 
+## FRR's Current Limitations
+FRR Zebra uses struct nexthop to track next hop information. If it is a recursive nexthop, its flags field would be set NEXTHOP_FLAG_RECURSIVE bit and its resolved field stores a pointer which points a list of nexthops obtained by recursive resolution. Therefore Zebra keeps hierarchical relationships on the recursive nexthops. 
 
-Because the Linux kernel lacks support for recursive routes, FRR zebra flattens the next-hop information of recursive routes when transferring it from Zebra to FPM or the Linux kernel. Currently, when a path goes down, zebra would inform various protocol processes and let them replay routes update events accordingly. 
+Because the Linux kernel lacks support for recursive routes, FRR Zebra flattens the next-hop information of recursive routes when transferring it from Zebra to FPM or the Linux kernel. Currently, when a path goes down, Zebra would inform various protocol processes and let them replay routes update events accordingly. 
 
 This leads an issue discussed in the SONiC Routing Working Group (https://lists.sonicfoundation.dev/g/sonic-wg-routing/files/SRv6%20use%20case%20-%20Routing%20WG.pptx).
 
@@ -57,7 +58,7 @@ To solve this issue, we need to introduce Prefix Independent Convergence (PIC) t
 
 Note: 
 - This HLD only focus on recursive VPN routes support. Since SONiC doesn't have MPLS VPN support in master, the testing would focus on EVPN and SRv6 VPN only. 
-- The similar approach could be applied to global table's recursive routes support. But that requires SAI APIs. Therefore, global table's recursive routes support is not in the scope of this HLD.
+- The similar approach could be applied to global table's recursive routes support. But that requires SAI APIs. Therefore, global table's recursive routes support is not in the scope of this HLD.(?? TODO It is per-vrf recursive enhancement, so the global will also benefit from this enhancement ??)
 
 ## Triggers Events
 Here are a list of trigger events which we want to take care for getting faster routes convergence and minimizing hardware traffic loss. 
@@ -71,7 +72,7 @@ Here are a list of trigger events which we want to take care for getting faster 
 | Case 5: Remote PE-CE link failure | This is remote PE's PIC local case.  | Remote PE will trigger PIC local handling for quick traffic fix up. Local PE will be updated after BGP gets informed. |
 
 ## FRR Current Approaches
-### NH dependency tree
+### NH Dependency Tree
 struct nexthop contains two fields, *resolved and *reparent for tracking nexthop resolution's dependencies. 
 
 	/* Nexthops obtained by recursive resolution.
@@ -88,7 +89,7 @@ https://github.com/FRRouting/frr/blob/858cc75b434344ae0b25eccaf6eef03debe4a031/l
 
 When a routing entry is processed by rib_process(), it calls nexthop_active_update() to parse and refresh the nexthop active state. By nexthop_set_resolved(), *resolved is set to the nexthop of the route used to resolve this nexthop, *rparent will also be correspondingly set and the flag of this nexthop is set to NEXTHOP_FLAG_RECURSIVE.
 
-### NHT list from route node
+### NHT List from Route Node
 Each route node (struct rib_dest_t ) contains a nht field which lists out all NHT prefixes which depend on this route node. 
 
 	/*
@@ -102,67 +103,61 @@ Each route node (struct rib_dest_t ) contains a nht field which lists out all NH
 
 nht is updated by zebra_rnh_store_in_routing_table() and zebra_rnh_remove_from_routing_table().
 
-### zebra_rib_evaluate_rn_nexthops
+### NHG Update Trigger
 
-list https://github.com/FRRouting/frr/blob/master/zebra/zebra_rib.c#L850C1-L856C45
+When Zebra triggers NHG update
 
-zebra_rib_evaluate_rn_nexthops() leverage the above list to trigger each depending recursive nh to get reevaluated.
-It starts from the incoming route node and retrieves its NHT (NextHop Track) list. Then, it iterates through each prefix in the NHT list, utilizing the prefix to invoke zebra_evaluate_rnh(). This function implements the functionality of NHG updating.
+- Zebra rib process
+- Dplane process complete
+- Ddplane route notify is received
+- Zfpm route updates
 
-When zebra triggers NHG update
-
-1. Zebra rib process.
-2. Dplane process complete.
-3. Dplane route notify is received.
-4. zfpm route updates.
-
-### Zebra triggers routes redownloading from protocol process
-Routes redownloading is triggered at the end of zebra_rib_evaluate_rn_nexthops()
+NHG update is carried out during replay of routes updating and zebra_rib_evaluate_rn_nexthops() can be seen as the entry point for this process. It starts from the incoming route node and retrieves its NHT list. Then it iterates through each prefix in the NHT list, utilizing the prefix to invoke zebra_evaluate_rnh().
 
 1. Identify the new route entry to resolve nexthops in the NHT list.
 2. Compare the new route entry with the old one, update the nexthop resolving state as the new route entry, and then send a nexthop change notification to protocol clients.
 3. Protocol clients recalculate the path associated with the nexthop, then resend the route to Zebra.
-4. The route's nexthop is recursively resolved, and the recursive one will be flattened.
-5. Pass the route to rib process.
-6. Call zebra_rib_evaluate_rn_nexthops(), then go to step 1. This loop procedure builds/refreshes the recursive route chain.
+4. Pass the route to rib_process().
+5. The route's nexthop is recursively resolved, and the recursive one will be flattened.
+6. Call zebra_rib_evaluate_rn_nexthops(), then go to step 1. This loop procedure builds/refreshes the recursive NHG chain.
 
 ## High Level Design
-The main changes are in the following areas
+The main enhancements are in the following areas
 
-- Zebra would have an option to enable recursive route support. In this mode, zebra would pass both underlay and overlay NHGs to fpm. But zebra will still pass collapsed NHG to Linux kernel. 
-- fpm needs to add a new schema to take each member as NHG id and update APP DB.
-- orchagent picks up event from APP DB and trigger NHG programming. Neighorch needs to handle this new schema without change too much on existing codes.
+- Zebra includes two enhancements for the recursive route. The first is to recalculate the route on route add/update independently, without relying on the protocol client for route updating. The second is to optimize the convergence logic of recursive NHG in the case of route withdrawal.
+- Fpm needs to add a new schema to take each member as NHG id and update APP DB.
+- Orchagent picks up event from APP DB and trigger NHG programming. Neighorch needs to handle this new schema without change too much on existing codes.
 
 ## Low Level Design
 
-### Recursive nexthop change notification
+### Routes Updating
 Consider the case of recursive routes for EVPN underlay
 
     B>  2.2.2.2/32 [200/0] (127) via 100.0.0.1 (recursive), weight 1, 00:00:02
-      *                            via 10.1.0.5, Ethernet2, weight 1, 00:00:02
+      *                            via 10.1.0.65, Ethernet1, weight 1, 00:00:02
       *                            via 10.1.0.66, Ethernet2, weight 1, 00:00:02
-      *                            via 10.1.0.67, Ethernet2, weight 1, 00:00:02
+      *                            via 10.1.0.67, Ethernet3, weight 1, 00:00:02
                                  via 200.0.0.1 (recursive), weight 1, 00:00:02
-      *                            via 10.1.0.76, Ethernet2, weight 1, 00:00:02
-      *                            via 10.1.0.77, Ethernet2, weight 1, 00:00:02
-      *                            via 10.1.0.78, Ethernet2, weight 1, 00:00:02
-    B>* 100.0.0.0/24 [200/0] (123) via 10.1.0.5, Ethernet2, weight 1, 00:00:02
+      *                            via 10.1.0.76, Ethernet4, weight 1, 00:00:02
+      *                            via 10.1.0.77, Ethernet5, weight 1, 00:00:02
+      *                            via 10.1.0.78, Ethernet6, weight 1, 00:00:02
+    B>* 100.0.0.0/24 [200/0] (123) via 10.1.0.65, Ethernet1, weight 1, 00:00:02
       *                            via 10.1.0.66, Ethernet2, weight 1, 00:00:02
-      *                            via 10.1.0.67, Ethernet2, weight 1, 00:00:02
-    B>* 200.0.0.0/24 [200/0] (108) via 10.1.0.76, Ethernet2, weight 1, 00:00:53
-      *                            via 10.1.0.77, Ethernet2, weight 1, 00:00:53
-      *                            via 10.1.0.78, Ethernet2, weight 1, 00:00:53
+      *                            via 10.1.0.67, Ethernet3, weight 1, 00:00:02
+    B>* 200.0.0.0/24 [200/0] (108) via 10.1.0.76, Ethernet4, weight 1, 00:00:53
+      *                            via 10.1.0.77, Ethernet5, weight 1, 00:00:53
+      *                            via 10.1.0.78, Ethernet6, weight 1, 00:00:53
 
-As described in the section "Routes Redownloading" above, if IGP node 10.1.0.68 for prefix 100.0.0.1 becomes unreachable, Zebra will explicitly redownload both routes for recursive convergence with the help of the BGP client, one for the prefix 10.1.0.68 and another for the prefix 2.2.2.2.
+As described in the above section, if node 10.1.0.67 for prefix 100.0.0.0/24 is gone, Zebra will explicitly update both routes for recursive convergence with the help of the BGP client, one for the prefix 100.0.0.0/24 and another for the prefix 2.2.2.2/32.
 
-In this scenario, since the reachability of the prefix 2.2.2.2 remains unchanged and also Zebra has the dependency relationships between recursive NHGs, there is a chance to improve Zebra for fast route convergence by itself via providing updated NHG information directly.
+In this scenario, since the reachability of the prefix 2.2.2.2 remains unchanged and also Zebra has the dependency relationships between recursive NHGs, there is a chance to improve Zebra for route convergence by itself.
 
 #### Data Structure Modifications
-In order to enable Zebra to "Redownload Routes" without notifying protocol clients, it should be able to obtain the route node associated with the NHG that has undergone changes. Some pointer fields need to be added.
+In order to enable Zebra to update routes without notifying protocol clients, it should be able to obtain the route node associated with the NHG that has undergone changes. Some back pointer fields need to be added. (?? TODO do we really need it??)
 
 <figure align=center>
     <img src="images/data_struct.jpg" >
-    <figcaption>Figure 3. data structure modification for routes backwalk<figcaption>
+    <figcaption>Figure 2. data structure modification for routes update<figcaption>
 </figure>
 
 ##### struct nhg_hash_entry 
@@ -178,8 +173,8 @@ New field struct list *routes in struct nhg_hash_entry
 
         ...
     }
-##### struct route_entry
 
+##### struct route_entry
 New field struct list *routes in struct route_entry
 
     struct route_entry {       
@@ -249,10 +244,9 @@ done:
 ```
 
 ##### struct hash *nhgs_ctx_hash
+zebra_rib_evaluate_rn_nexthops() triggers routes updating through NHG backwalk. Without the assistance of protocol clients, a method needs to be introduced for looking up NHG based on the prefix of the NHT list. e.g. Finding NHG based on the prefix 100.0.0.1.
 
-zebra_rib_evaluate_rn_nexthops() triggers routes redownloading through NHG backwalk. Without the assistance of protocol clients, a method needs to be introduced for looking up NHG based on the prefix of the NHT list. e.g. Finding NHG based on the prefix 100.0.0.1.
-
-Add a new hash table *nhgs_ctx_hash in struct zebra_router to accomplish this task.
+A new hash table *nhgs_ctx_hash is for this task.
 
     struct zebra_router {
         ...
@@ -328,32 +322,83 @@ static int zebra_nhg_insert_nhe_ctx(struct nhg_hash_entry *nhe)
     ...
 }
 ```
-#### How the backwalk starts and ends
+
+#### Routes Updating Handling
+The newly added zebra_rnh_refresh_dependents() handles the routes updating, replacing the protocol client's notification. It will be detailed in the following sections.
 
 <figure align=center>
     <img src="images/backwalk_functions.jpg" >
-    <figcaption>Figure 4. routes backwalk functions<figcaption>
+    <figcaption>Figure 3. routes updating function<figcaption>
 </figure>
 
-The backwalk starts when zebra_rib_evaluate_rn_nexthops() function is called. It should be stopped when the route node's NHT list is empty. In other words, there are no nexthops resolving depending on this route node. 
-
-This retains the original approach of Zebra for updating the resolve state of each route in the backwalk chain, so the backwalk will continue until prefix 2.2.2.2.
-
-However, at the Dplane/FPM level, there is no need to refresh the recursive NHG for prefix 2.2.2.2 again, since the reachability of it hasn't changed, and the recursive NHG's ID should remain unchanged.
+The replay of routes updating starts when zebra_rib_evaluate_rn_nexthops() function is called and should be stopped when the route node's NHT list is empty. In other words, there are no nexthops resolving depending on this route node. It retains the original approach of Zebra for updating the resolve state of each route, so the handling will continue until prefix 2.2.2.2. However, at dplane/fpm level, there is no need to refresh the recursive NHG for prefix 2.2.2.2 again, since the reachability of it hasn't changed, and the ID of this recursive NHG should remain unchanged.
 
 <figure align=center>
-    <img src="images/nhg_id.jpg" >
-    <figcaption>Figure 5. NHG ID dependents<figcaption>
+    <img src="images/nhg_id_change.jpg" >
+    <figcaption>Figure 4. NHG ID change for route convergence<figcaption>
 </figure>
 
+To maintain the NHG ID unchanged for recursive NHG, refer to the zebra_rnh_refresh_dependents section for the details.
+
+### Fast Convergence for Route Withdrawal
+As the case of recursive routes for EVPN underlay
+
+    B>  2.2.2.2/32 [200/0] (127) via 100.0.0.1 (recursive), weight 1, 00:00:02
+      *                            via 10.1.0.65, Ethernet1, weight 1, 00:00:02
+      *                            via 10.1.0.66, Ethernet2, weight 1, 00:00:02
+      *                            via 10.1.0.67, Ethernet3, weight 1, 00:00:02
+                                 via 200.0.0.1 (recursive), weight 1, 00:00:02
+      *                            via 10.1.0.76, Ethernet4, weight 1, 00:00:02
+      *                            via 10.1.0.77, Ethernet5, weight 1, 00:00:02
+      *                            via 10.1.0.78, Ethernet6, weight 1, 00:00:02
+    B>* 100.0.0.0/24 [200/0] (123) via 10.1.0.65, Ethernet1, weight 1, 00:00:02
+      *                            via 10.1.0.66, Ethernet2, weight 1, 00:00:02
+      *                            via 10.1.0.67, Ethernet3, weight 1, 00:00:02
+    B>* 200.0.0.0/24 [200/0] (108) via 10.1.0.76, Ethernet4, weight 1, 00:00:53
+      *                            via 10.1.0.77, Ethernet5, weight 1, 00:00:53
+      *                            via 10.1.0.78, Ethernet6, weight 1, 00:00:53
+
+If the local interface Ethernet6 is down or the route "200.0.0.0/24 via 10.1.0.78, Ethernet6" receives an explicit withdrawal from the IGP node.
+
+<figure align=center>
+    <img src="images/route_delete.jpg" >
+    <figcaption>Figure 5. rib deletion<figcaption>
+</figure>
+
+Rib deletion for interface down or route withdrawal is handled in rib_process(), then zebra_rnh_refresh_dependents() also handles route withdrawal case.
+
 #### Data Structure Modifications
-TODO: How to keep the NHG ID unchanged for a recursive NHG? in zebra_nhe_find()?
+No Zebra original data structure modification is required as it leverages Zebra's NHG dependents chain.
+
+#### Fast Convergence Handling
+Fast convergence for route withdrawal is also handled in the zebra_rnh_refresh_dependents(). The detailed is in the next section.
+
+### The Handling of zebra_rnh_refresh_dependents()
+
+This new function is inserted into the existing route convergence process, allowing Zebra to autonomously achieve route convergence in the case where the reachability of recursive routes remains unchanged.
+
+Provide a brief description of Zebra's original recursive convergence process.
+
+<figure align=center>
+    <img src="images/route_converge_original.jpg" >
+    <figcaption>Figure 6. route convergence process<figcaption>
+</figure>
+
+Route/Nexthop dependents are built or refreshed from the bottom up with each invocation of zebra_rnh_eval_nexthop_entry().
+
+After the insertion of zebra_rnh_refresh_dependents into the original recursive convergence process.
+
+<figure align=center>
+    <img src="images/zebra_rnh_refresh_dependents.jpg" >
+    <figcaption>Figure 7. zebra_rnh_refresh_dependents()<figcaption>
+</figure>
+
+The route convergence logic in the red will be replaced by the blue section.
+
+In step 1.7/2.4, a new flag ROUTE_ENTRY_NHG_ID_PRESERVED added in struct route_entry. The flag is set if the associated nhe's reachability is unchanged, after that rib_process() skip the routes which has this flag.
 
 ### Dataplane refresh for Nexthop group change
 As the recursive NHG ID remains unchanged, Zebra is able to bypass forwarding this route to Dplane/FPM. In other words, the backwalk in Dplane/FPM terminates at the recursive NHG route.
-
-#### Data Structure Modifications
-TODO: Add a status flag ROUTE_ENTRY_NHG_ID_PRESERVED in struct route_entry? rib_process_update_fib() skip the routes with this flag?
 
 ### FPM's new schema for recursive NHG
 We rely on BRCM and NTT's NHG changes.
@@ -361,42 +406,41 @@ We rely on BRCM and NTT's NHG changes.
 ### Orchagent changes
 We rely on BRCM and NTT's NHG changes.
 
-## Unit Tests
+## Unit Test
 ### Normal Case's Forwarding Chain Information
 ### Test Case 1: local link failure
 <figure align=center>
     <img src="images/testcase1.png" >
-    <figcaption>Figure 6.local link failure <figcaption>
+    <figcaption>Figure 8.local link failure <figcaption>
 </figure>
 
 ### Test Case 2: IGP remote link/node failure
 <figure align=center>
     <img src="images/testcase2.png" >
-    <figcaption>Figure 7. IGP remote link/node failure
+    <figcaption>Figure 9. IGP remote link/node failure
  <figcaption>
 </figure>
 
 ### Test Case 3: IGP remote PE failure
 <figure align=center>
     <img src="images/testcase3.png" >
-    <figcaption>Figure 8. IGP remote PE failure
+    <figcaption>Figure 10. IGP remote PE failure
  <figcaption>
 </figure>
 
 ### Test Case 4: BGP remote PE node failure
 <figure align=center>
     <img src="images/testcase4.png" >
-    <figcaption>Figure 9. BGP remote PE node failure
+    <figcaption>Figure 11. BGP remote PE node failure
  <figcaption>
 </figure>
 
 ### Test Case 5: Remote PE-CE link failure
 <figure align=center>
     <img src="images/testcase5.png" >
-    <figcaption>Figure 10. Remote PE-CE link failure
+    <figcaption>Figure 12. Remote PE-CE link failure
  <figcaption>
 </figure>
-
 
 ## References
 - https://github.com/sonic-net/SONiC/pull/1425
