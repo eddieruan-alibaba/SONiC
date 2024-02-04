@@ -402,7 +402,6 @@ In step 1.7/2.4, a new flag ROUTE_ENTRY_NHG_ID_PRESERVED added in struct route_e
 
 ### Dataplane refresh for Nexthop group change
 As the recursive NHG ID remains unchanged, Zebra is able to bypass forwarding this route to Dplane/FPM. In other words, the backwalk in Dplane/FPM terminates at the recursive NHG route.
-Data Structure Modifications
 
 ### FPM's new schema for recursive NHG
 We rely on BRCM and NTT's NHG changes.
