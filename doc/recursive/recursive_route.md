@@ -341,7 +341,7 @@ The replay of routes updating starts when zebra_rib_evaluate_rn_nexthops() funct
     <figcaption>Figure 4. NHG ID change for route convergence<figcaption>
 </figure>
 
-TODO: How to keep the NHG ID unchanged for a recursive NHG? in zebra_nhe_find()?
+To maintain the NHG ID unchanged during recursive NHG, refer to the zebra_rnh_refresh_dependents section for the details.
 
 ### Fast Convergence for Route Withdrawal
 As the case of recursive routes for EVPN underlay
