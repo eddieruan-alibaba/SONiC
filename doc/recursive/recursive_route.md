@@ -104,13 +104,12 @@ Each route node (struct rib_dest_t ) contains a nht field which lists out all NH
 nht is updated by zebra_rnh_store_in_routing_table() and zebra_rnh_remove_from_routing_table().
 
 ### NHG Update Trigger
+Zebra will trigger routes update in the following locations
 
-When Zebra triggers NHG update
-
-- Zebra rib process
-- Dplane process complete
-- Ddplane route notify is received
-- Zfpm route updates
+- After each invocation of rib_process()
+- After rib_process_result() for processing after async dataplane update
+- After rib_process_dplane_notify() for the dataplane has detected some change to a route
+- After zfpm_build_route_updates() for deleting the destination if necessary
 
 NHG update is carried out during replay of routes updating and zebra_rib_evaluate_rn_nexthops() can be seen as the entry point for this process. It starts from the incoming route node and retrieves its NHT list. Then it iterates through each prefix in the NHT list, utilizing the prefix to invoke zebra_evaluate_rnh().
 
