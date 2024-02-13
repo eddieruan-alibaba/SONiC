@@ -120,14 +120,13 @@ NHG update is carried out during replay of routes updating and zebra_rib_evaluat
 5. The route's nexthop is recursively resolved, and the recursive one will be flattened.
 6. Call zebra_rib_evaluate_rn_nexthops(), then go to step 1. This loop procedure builds/refreshes the recursive NHG chain.
 
+## Requirements Overview
+This HLD focus on Zebra and introduces two enhancements for the recursive route. The first is to recalculate the route on route add/update independently, without relying on the protocol client for route updating. The second is to optimize the convergence logic of recursive nexthop group in the case of route withdrawal. If Zebra serves as the control plane, then corresponding adjustments will be made to FPM and Orchagent to collaborate with it, thereby enhancing the overall efficiency of route convergence.
+
+- Fpm needs to add a new schema to take each member as NHG id and update APP DB. (Rely on BRCM and NTT's NHG changes)
+- Orchagent picks up event from APP DB and trigger NHG programming. Neighorch needs to handle this new schema without change too much on existing codes. (Rely on BRCM and NTT's NHG changes)
+
 ## High Level Design
-The main enhancements are in the following areas
-
-- Zebra includes two enhancements for the recursive route. The first is to recalculate the route on route add/update independently, without relying on the protocol client for route updating. The second is to optimize the convergence logic of recursive NHG in the case of route withdrawal.
-- Fpm needs to add a new schema to take each member as NHG id and update APP DB.
-- Orchagent picks up event from APP DB and trigger NHG programming. Neighorch needs to handle this new schema without change too much on existing codes.
-
-## Low Level Design
 
 ### Routes Updating
 Consider the case of recursive routes for EVPN underlay
@@ -149,10 +148,10 @@ Consider the case of recursive routes for EVPN underlay
 
 As described in the above section, if node 10.1.0.67 for prefix 100.0.0.0/24 is gone, Zebra will explicitly update both routes for recursive convergence with the help of the BGP client, one for the prefix 100.0.0.0/24 and another for the prefix 2.2.2.2/32.
 
-In this scenario, since the reachability of the prefix 2.2.2.2 remains unchanged and also Zebra has the dependency relationships between recursive NHGs, there is a chance to improve Zebra for route convergence by itself.
+In this scenario, since the reachability of the prefix 2.2.2.2 remains unchanged and also Zebra has the dependency relationships between recursive nexthop groups, there is a chance to improve Zebra for route convergence by itself.
 
 #### Data Structure Modifications
-In order to enable Zebra to update routes without notifying protocol clients, it should be able to obtain the route node associated with the NHG that has undergone changes. Some back pointer fields need to be added. (?? TODO do we really need it??)
+In order to enable Zebra to update routes without notifying protocol clients, it should be able to obtain the route node associated with the nexthop group that has undergone changes. Some back pointer fields need to be added.
 
 <figure align=center>
     <img src="images/data_struct.jpg" >
@@ -243,9 +242,9 @@ done:
 ```
 
 ##### struct rnh
-zebra_rib_evaluate_rn_nexthops() triggers routes updating through NHG backwalk. Without the assistance of protocol clients, a method needs to be introduced for looking up NHG based on the prefix of the NHT list. e.g. Finding NHG based on the prefix 100.0.0.1.
+zebra_rib_evaluate_rn_nexthops() triggers routes updating through nexthop group backwalk. Without the assistance of protocol clients, a method needs to be introduced for looking up nexthop group based on the prefix of the NHT list. e.g. Finding the nexthop group based on the prefix 100.0.0.1.
 
-A new field nhe_id is added for this task.
+A new field nhe_id is added for this purpose.
 
     struct rnh {
         ...
@@ -256,7 +255,7 @@ A new field nhe_id is added for this task.
         ...
     }
 
-This field provides information about which nhe is associated with the NHT prefix. nhg_id_rnh_add() is invoked each time a new nhe is created in zebra_nhe_find().
+This field provides information about which nhe is associated with the NHT prefix. nhg_id_rnh_add() is used to set this field and it is invoked each time a new nhe is created in zebra_nhe_find().
 
 ``` C
 static bool zebra_nhe_find(struct nhg_hash_entry **nhe, /* return value */
