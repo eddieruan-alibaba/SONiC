@@ -357,6 +357,30 @@ static void nhg_id_rnh_add(struct nhg_hash_entry *nhe)
 
 The newly added zebra_rnh_refresh_dependents() handles the routes updating, replacing the protocol client's notification. It will be detailed in the following sections.
 
+#### The Handling of zebra_rnh_refresh_dependents()
+
+This new function is inserted into the existing route convergence process, allowing Zebra to autonomously achieve route convergence in the case where the reachability of recursive routes remains unchanged.
+
+Provide a brief description of Zebra's original recursive convergence process.
+
+<figure align=center>
+    <img src="images/route_converge_original.jpg" >
+    <figcaption>Figure 6. route convergence process<figcaption>
+</figure>
+
+Route/Nexthop dependents are built or refreshed from the bottom up with each invocation of zebra_rnh_eval_nexthop_entry().
+
+After the insertion of zebra_rnh_refresh_dependents into the original recursive convergence process.
+
+<figure align=center>
+    <img src="images/zebra_rnh_refresh_dependents.jpg" >
+    <figcaption>Figure 7. zebra_rnh_refresh_dependents()<figcaption>
+</figure>
+
+The route convergence logic in the red will be replaced by the blue section.
+
+In step 1.7/2.4, a new flag ROUTE_ENTRY_NHG_ID_PRESERVED added in struct route_entry. The flag is set if the associated nhe's reachability is unchanged, after that rib_process() skip the routes which has this flag.
+
 ### Nexthop Group ID Handling
 The original approach of routes updating starts when zebra_rib_evaluate_rn_nexthops() function is called and stops when the route node's NHT list is empty. In other words, it stops when there are no nexthops resolving depending on this route node. During this backwalk process for route updating, the nexthop group of these routes is recreated, along with its ID being changed. However, at dplane/fpm level, there is no need to refresh the recursive nexthop group for prefix 2.2.2.2 and 100.0.0.1 again, since the reachability for both of them hasn't changed, and the nexthop group ID could remain unchanged.
 
@@ -365,7 +389,7 @@ The original approach of routes updating starts when zebra_rib_evaluate_rn_nexth
     <figcaption>Figure 4.  ID change for route convergence<figcaption>
 </figure>
 
-To maintain the  ID unchanged for recursive nexthop group, refer to the zebra_rnh_refresh_dependents section for the details.
+#### Data Structure Modifications
 
 ### Fast Convergence for Route Withdrawal
 As the case of recursive routes for EVPN underlay
@@ -399,30 +423,6 @@ No Zebra original data structure modification is required as it leverages Zebra'
 
 #### Fast Convergence Handling
 Fast convergence for route withdrawal is also handled in the zebra_rnh_refresh_dependents(). The detailed is in the next section.
-
-### The Handling of zebra_rnh_refresh_dependents()
-
-This new function is inserted into the existing route convergence process, allowing Zebra to autonomously achieve route convergence in the case where the reachability of recursive routes remains unchanged.
-
-Provide a brief description of Zebra's original recursive convergence process.
-
-<figure align=center>
-    <img src="images/route_converge_original.jpg" >
-    <figcaption>Figure 6. route convergence process<figcaption>
-</figure>
-
-Route/Nexthop dependents are built or refreshed from the bottom up with each invocation of zebra_rnh_eval_nexthop_entry().
-
-After the insertion of zebra_rnh_refresh_dependents into the original recursive convergence process.
-
-<figure align=center>
-    <img src="images/zebra_rnh_refresh_dependents.jpg" >
-    <figcaption>Figure 7. zebra_rnh_refresh_dependents()<figcaption>
-</figure>
-
-The route convergence logic in the red will be replaced by the blue section.
-
-In step 1.7/2.4, a new flag ROUTE_ENTRY_NHG_ID_PRESERVED added in struct route_entry. The flag is set if the associated nhe's reachability is unchanged, after that rib_process() skip the routes which has this flag.
 
 ### Dataplane refresh for Nexthop group change
 As the recursive nexthop group ID remains unchanged, Zebra is able to bypass forwarding this route to Dplane/FPM. In other words, the backwalk in Dplane/FPM terminates at the recursive route.
