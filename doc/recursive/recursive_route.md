@@ -357,14 +357,7 @@ static void nhg_id_rnh_add(struct nhg_hash_entry *nhe)
 ```
 
 #### Routes Updating Handling
-The newly added zebra_rnh_refresh_dependents() handles the routes updating, replacing the protocol client's notification. It will be detailed in the following sections.
-
-<figure align=center>
-    <img src="images/backwalk_functions.jpg" >
-    <figcaption>Figure 3. routes updating function<figcaption>
-</figure>
-
-The replay of routes updating starts when zebra_rib_evaluate_rn_nexthops() function is called and should be stopped when the route node's NHT list is empty. In other words, there are no nexthops resolving depending on this route node. It retains the original approach of Zebra for updating the resolve state of each route, so the handling will continue until prefix 2.2.2.2. However, at dplane/fpm level, there is no need to refresh the recursive NHG for prefix 2.2.2.2 again, since the reachability of it hasn't changed, and the ID of this recursive NHG should remain unchanged.
+The original approach of routes updating starts when zebra_rib_evaluate_rn_nexthops() function is called and stops when the route node's NHT list is empty. In other words, it stops when there are no nexthops resolving depending on this route node. During this backwalk process for route updating, the nhe of these routes is recreated, along with its ID being changed. However, at dplane/fpm level, there is no need to refresh the recursive NHG for prefix 2.2.2.2 and 100.0.0.1 again, since the reachability for both of them hasn't changed, and the ID of this recursive NHG could remain unchanged.
 
 <figure align=center>
     <img src="images/nhg_id_change.jpg" >
@@ -372,6 +365,8 @@ The replay of routes updating starts when zebra_rib_evaluate_rn_nexthops() funct
 </figure>
 
 To maintain the NHG ID unchanged for recursive NHG, refer to the zebra_rnh_refresh_dependents section for the details.
+
+The newly added zebra_rnh_refresh_dependents() handles the routes updating, replacing the protocol client's notification. It will be detailed in the following sections.
 
 ### Fast Convergence for Route Withdrawal
 As the case of recursive routes for EVPN underlay
