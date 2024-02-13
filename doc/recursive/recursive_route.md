@@ -21,7 +21,7 @@
     - [Data Structure Modifications](#data-structure-modifications)
       - [struct nhg\_hash\_entry](#struct-nhg_hash_entry)
       - [struct route\_entry](#struct-route_entry)
-      - [struct hash \*nhgs\_ctx\_hash](#struct-hash-nhgs_ctx_hash)
+      - [struct rnh](#struct-rnh)
     - [Routes Updating Handling](#routes-updating-handling)
   - [Fast Convergence for Route Withdrawal](#fast-convergence-for-route-withdrawal)
     - [Data Structure Modifications](#data-structure-modifications-1)
@@ -242,21 +242,21 @@ done:
 }
 ```
 
-##### struct hash *nhgs_ctx_hash
+##### struct rnh
 zebra_rib_evaluate_rn_nexthops() triggers routes updating through NHG backwalk. Without the assistance of protocol clients, a method needs to be introduced for looking up NHG based on the prefix of the NHT list. e.g. Finding NHG based on the prefix 100.0.0.1.
 
-A new hash table *nhgs_ctx_hash is for this task.
+A new field nhe_id is added for this task.
 
-    struct zebra_router {
+    struct rnh {
         ...
 
-        /* The hash of nexthop groups ctx associated with this router */
-        struct hash *nhgs_ctx_hash;
+        /* nhe id currently associated */
+        uint32_t nhe_id;
 
         ...
     }
 
-The hash stores the mapping information from the NHT prefix to the corresponding recursive NHG. zebra_nhg_insert_nhe_ctx() is invoked each time a new NHG is created in zebra_nhe_find(). Only the recursive one is inserted into the hash.
+This field provides information about which nhe is associated with the NHT prefix. nhg_id_rnh_add() is invoked each time a new nhe is created in zebra_nhe_find().
 
 ``` C
 static bool zebra_nhe_find(struct nhg_hash_entry **nhe, /* return value */
@@ -276,49 +276,83 @@ done:
     (*nhe)->uptime = monotime(NULL);
 
     if (created)
-        zebra_nhg_insert_nhe_ctx(newnhe);
+        nhg_id_rnh_add(*nhe);
 
     return created;
 }
 ```
 
 ``` c
-static int zebra_nhg_insert_nhe_ctx(struct nhg_hash_entry *nhe)
+static void nhg_id_rnh_add(struct nhg_hash_entry *nhe)
 {
-    struct nhe_ctx lookup;
-    struct nhe_ctx *exist = NULL;
+    struct prefix p;
+    struct rnh *rnh;
+    struct nexthop *nexthop;
+    struct in_addr local_ipv4;
+    struct in_addr *ipv4;
+    afi_t afi = AFI_IP;
 
-    if (!nhe || !nhe->id)
-        return -1;
+    if (!nhe)
+        return;
 
-    if (nhe->nhg.nexthop->next || (nhe->nhg.nexthop->type != NEXTHOP_TYPE_IPV4
-        && nhe->nhg.nexthop->type != NEXTHOP_TYPE_IPV6)) {
-        if (IS_ZEBRA_DEBUG_NHG)
-            zlog_debug("%s: Skip NHG id (%u), vrf %s",
-                __func__, nhe->id, vrf_id_to_name(nhe->nhg.nexthop->vrf_id));
-        return -1;
+    nexthop = nhe->nhg.nexthop;
+
+    /* IPv4/6 singleton nexthop */
+    if (!nexthop->next && nexthop->type >= NEXTHOP_TYPE_IPV4
+        && nexthop->type <= NEXTHOP_TYPE_IPV6_IFINDEX
+        && CHECK_FLAG(nhe->flags, NEXTHOP_GROUP_VALID)) {
+
+        switch (nexthop->type) {
+            case NEXTHOP_TYPE_IPV6:
+            case NEXTHOP_TYPE_IPV6_IFINDEX:
+                afi = AFI_IP6;
+                break;
+            case NEXTHOP_TYPE_IPV4:
+            case NEXTHOP_TYPE_IPV4_IFINDEX:
+                afi = AFI_IP;
+                break;
+            default:
+                break;
+        }
+
+        /* Validation for ipv4 mapped ipv6 nexthop. */
+        if (IS_MAPPED_IPV6(&nexthop->gate.ipv6)) {
+            afi = AFI_IP;
+            ipv4 = &local_ipv4;
+            ipv4_mapped_ipv6_to_ipv4(&nexthop->gate.ipv6, ipv4);
+        } else {
+            ipv4 = &nexthop->gate.ipv4;
+        }
+
+        /* Make lookup prefix. */
+        memset(&p, 0, sizeof(struct prefix));
+        switch (afi) {
+            case AFI_IP:
+                p.family = AF_INET;
+                p.prefixlen = IPV4_MAX_PREFIXLEN;
+                p.u.prefix4 = *ipv4;
+                break;
+            case AFI_IP6:
+                p.family = AF_INET6;
+                p.prefixlen = IPV6_MAX_PREFIXLEN;
+                p.u.prefix6 = nexthop->gate.ipv6;
+                break;
+            default:
+                break;
+        }
+
+        rnh = zebra_lookup_rnh(&p, nexthop->vrf_id, RNH_NEXTHOP_TYPE);
+
+        if (rnh && rnh->nhe_id != nhe->id) {
+            if (IS_ZEBRA_DEBUG_NHG) {
+                char buf[PREFIX_STRLEN] = "";
+                zlog_debug("%s: Add nhe %d (vrf %s, NH %s)",
+                    __func__, nhe->id, vrf_id_to_name(nexthop->vrf_id),
+                    prefix2str(&p, buf, sizeof(buf)));
+            }
+            rnh->nhe_id = nhe->id;
+        }
     }
-
-    lookup.nhe_id = nhe->id;
-    lookup.vrf_id = nhe->nhg.nexthop->vrf_id;
-    lookup.nh_type = nhe->nhg.nexthop->type;
-    lookup.gate = nhe->nhg.nexthop->gate;
-
-    exist = hash_lookup(zrouter.nhgs_ctx_hash, &lookup);
-
-    if (exist && exist->nhe_id != nhe->id) {
-        if (IS_ZEBRA_DEBUG_NHG)
-            zlog_debug("%s: NHG id (%u), vrf %s => NHG id (%u), vrf %s",
-                __func__, exist->nhe_id, vrf_id_to_name(exist->vrf_id),
-                nhe->id, vrf_id_to_name(exist->vrf_id));
-
-        exist->nhe_id = nhe->id;
-        return 0;
-    }
-
-    hash_get(zrouter.nhgs_ctx_hash, &lookup, zebra_nhg_ctx_hash_alloc);
-
-    ...
 }
 ```
 
