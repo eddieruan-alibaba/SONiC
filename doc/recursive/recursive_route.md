@@ -146,9 +146,9 @@ Consider the case of recursive routes for EVPN underlay
       *                            via 10.1.0.77, Ethernet5, weight 1, 00:00:53
       *                            via 10.1.0.78, Ethernet6, weight 1, 00:00:53
 
-As described in the above section, if node 10.1.0.67 for prefix 100.0.0.0/24 is gone, Zebra will explicitly update both routes for recursive convergence with the help of the BGP client, one for the prefix 100.0.0.0/24 and another for the prefix 2.2.2.2/32.
+As described in the above section, if the path 10.1.0.67 for prefix 100.0.0.0/24 is new added, Zebra will explicitly update both routes for recursive convergence with the help of the BGP client, one for the prefix 100.0.0.0/24 and another for the prefix 2.2.2.2/32.
 
-In this scenario, since the reachability of the prefix 2.2.2.2 remains unchanged and also Zebra has the dependency relationships between recursive nexthop groups, there is a chance to improve Zebra for route convergence by itself.
+In this scenario, although the route for prefix 100.0.0.0/24 has a new added path, but the reachability of the prefix 2.2.2.2 remains unchanged and also Zebra has the dependency relationships between recursive nexthop groups, so there is a chance to improve Zebra for route convergence by itself.
 
 #### Data Structure Modifications
 In order to enable Zebra to update routes without notifying protocol clients, it should be able to obtain the route node associated with the nexthop group that has undergone changes. Some back pointer fields need to be added.
@@ -255,9 +255,13 @@ A new field nhe_id is added for this purpose.
         ...
     }
 
-This field provides information about which nhe is associated with the NHT prefix. nhg_id_rnh_add() is used to set this field and it is invoked each time a new nhe is created in zebra_nhe_find().
+This field provides information about which nexthop group is associated with the NHT prefix.
 
-``` C
+nhg_id_rnh_add() is used to set this field and it is invoked each time a new nexthop group is created in zebra_nhe_find().
+``` c
+static void nhg_id_rnh_add(struct nhg_hash_entry *nhe)
+```
+``` c
 static bool zebra_nhe_find(struct nhg_hash_entry **nhe, /* return value */
                struct nhg_hash_entry *lookup,
                struct nhg_connected_tree_head *nhg_depends,
@@ -281,82 +285,6 @@ done:
 }
 ```
 
-``` c
-static void nhg_id_rnh_add(struct nhg_hash_entry *nhe)
-{
-    struct prefix p;
-    struct rnh *rnh;
-    struct nexthop *nexthop;
-    struct in_addr local_ipv4;
-    struct in_addr *ipv4;
-    afi_t afi = AFI_IP;
-
-    if (!nhe)
-        return;
-
-    nexthop = nhe->nhg.nexthop;
-
-    /* IPv4/6 singleton nexthop */
-    if (!nexthop->next && nexthop->type >= NEXTHOP_TYPE_IPV4
-        && nexthop->type <= NEXTHOP_TYPE_IPV6_IFINDEX
-        && CHECK_FLAG(nhe->flags, NEXTHOP_GROUP_VALID)) {
-
-        switch (nexthop->type) {
-            case NEXTHOP_TYPE_IPV6:
-            case NEXTHOP_TYPE_IPV6_IFINDEX:
-                afi = AFI_IP6;
-                break;
-            case NEXTHOP_TYPE_IPV4:
-            case NEXTHOP_TYPE_IPV4_IFINDEX:
-                afi = AFI_IP;
-                break;
-            default:
-                break;
-        }
-
-        /* Validation for ipv4 mapped ipv6 nexthop. */
-        if (IS_MAPPED_IPV6(&nexthop->gate.ipv6)) {
-            afi = AFI_IP;
-            ipv4 = &local_ipv4;
-            ipv4_mapped_ipv6_to_ipv4(&nexthop->gate.ipv6, ipv4);
-        } else {
-            ipv4 = &nexthop->gate.ipv4;
-        }
-
-        /* Make lookup prefix. */
-        memset(&p, 0, sizeof(struct prefix));
-        switch (afi) {
-            case AFI_IP:
-                p.family = AF_INET;
-                p.prefixlen = IPV4_MAX_PREFIXLEN;
-                p.u.prefix4 = *ipv4;
-                break;
-            case AFI_IP6:
-                p.family = AF_INET6;
-                p.prefixlen = IPV6_MAX_PREFIXLEN;
-                p.u.prefix6 = nexthop->gate.ipv6;
-                break;
-            default:
-                break;
-        }
-
-        rnh = zebra_lookup_rnh(&p, nexthop->vrf_id, RNH_NEXTHOP_TYPE);
-
-        if (rnh && rnh->nhe_id != nhe->id) {
-            if (IS_ZEBRA_DEBUG_NHG) {
-                char buf[PREFIX_STRLEN] = "";
-                zlog_debug("%s: Add nhe %d (vrf %s, NH %s)",
-                    __func__, nhe->id, vrf_id_to_name(nexthop->vrf_id),
-                    prefix2str(&p, buf, sizeof(buf)));
-            }
-            rnh->nhe_id = nhe->id;
-        }
-    }
-}
-```
-
-The newly added zebra_rnh_refresh_dependents() handles the routes updating, replacing the protocol client's notification. It will be detailed in the following sections.
-
 #### The Handling of zebra_rnh_refresh_dependents()
 
 This new function is inserted into the existing route convergence process, allowing Zebra to autonomously achieve route convergence in the case where the reachability of recursive routes remains unchanged.
@@ -365,7 +293,7 @@ Provide a brief description of Zebra's original recursive convergence process.
 
 <figure align=center>
     <img src="images/route_converge_original.jpg" >
-    <figcaption>Figure 6. route convergence process<figcaption>
+    <figcaption>Figure 3. route convergence process<figcaption>
 </figure>
 
 Route/Nexthop dependents are built or refreshed from the bottom up with each invocation of zebra_rnh_eval_nexthop_entry().
@@ -374,7 +302,7 @@ After the insertion of zebra_rnh_refresh_dependents into the original recursive 
 
 <figure align=center>
     <img src="images/zebra_rnh_refresh_dependents.jpg" >
-    <figcaption>Figure 7. zebra_rnh_refresh_dependents()<figcaption>
+    <figcaption>Figure 4. zebra_rnh_refresh_dependents()<figcaption>
 </figure>
 
 The route convergence logic in the red will be replaced by the blue section.
@@ -386,7 +314,7 @@ The original approach of routes updating starts when zebra_rib_evaluate_rn_nexth
 
 <figure align=center>
     <img src="images/nhg_id_change.jpg" >
-    <figcaption>Figure 4.  ID change for route convergence<figcaption>
+    <figcaption>Figure 5.  ID change for route convergence<figcaption>
 </figure>
 
 #### Data Structure Modifications
@@ -413,7 +341,7 @@ If the local interface Ethernet6 is down or the route "200.0.0.0/24 via 10.1.0.7
 
 <figure align=center>
     <img src="images/route_delete.jpg" >
-    <figcaption>Figure 5. rib deletion<figcaption>
+    <figcaption>Figure 6. rib deletion<figcaption>
 </figure>
 
 Rib deletion for interface down or route withdrawal is handled in rib_process(), then zebra_rnh_refresh_dependents() also handles route withdrawal case.
@@ -438,34 +366,34 @@ We rely on BRCM and NTT's changes.
 ### Test Case 1: local link failure
 <figure align=center>
     <img src="images/testcase1.png" >
-    <figcaption>Figure 8.local link failure <figcaption>
+    <figcaption>Figure 7.local link failure <figcaption>
 </figure>
 
 ### Test Case 2: IGP remote link/node failure
 <figure align=center>
     <img src="images/testcase2.png" >
-    <figcaption>Figure 9. IGP remote link/node failure
+    <figcaption>Figure 8. IGP remote link/node failure
  <figcaption>
 </figure>
 
 ### Test Case 3: IGP remote PE failure
 <figure align=center>
     <img src="images/testcase3.png" >
-    <figcaption>Figure 10. IGP remote PE failure
+    <figcaption>Figure 9. IGP remote PE failure
  <figcaption>
 </figure>
 
 ### Test Case 4: BGP remote PE node failure
 <figure align=center>
     <img src="images/testcase4.png" >
-    <figcaption>Figure 11. BGP remote PE node failure
+    <figcaption>Figure 10. BGP remote PE node failure
  <figcaption>
 </figure>
 
 ### Test Case 5: Remote PE-CE link failure
 <figure align=center>
     <img src="images/testcase5.png" >
-    <figcaption>Figure 12. Remote PE-CE link failure
+    <figcaption>Figure 11. Remote PE-CE link failure
  <figcaption>
 </figure>
 
