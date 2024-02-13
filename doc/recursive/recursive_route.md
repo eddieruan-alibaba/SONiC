@@ -305,12 +305,53 @@ After the insertion of zebra_rnh_refresh_dependents into the original recursive 
     <figcaption>Figure 4. zebra_rnh_refresh_dependents()<figcaption>
 </figure>
 
-The route convergence logic in the red will be replaced by the blue section.
+The logic in the red portion of the code will achieve fast route convergence updating. But it won't completely disable the protocol client's notification mechanism because when the reachability of routes that the NHT list depends on changes, i.e., when the routes it depends on change completely to another one, Zebra will still use the original protocol client notify mechanism for route convergence. In other words, the blue portion will only take effect when there's an increase or decrease in the paths corresponding to the nexthop group that doesn't affect route reachability.
+
+The timing of zebra_rnh_refresh_dependents() invocation is as follows:
+
+``` c
+static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
+					 int force, struct route_node *nrn,
+					 struct rnh *rnh,
+					 struct route_node *prn,
+					 struct route_entry *re)
+{
+    int state_changed = 0;
+
+    /* If we're resolving over a different route, resolution has changed or
+    * the resolving route has some change (e.g., metric), there is a state
+    * change.
+    */
+    zebra_rnh_remove_from_routing_table(rnh);
+    if (!prefix_same(&rnh->resolved_route, prn ? &prn->p : NULL)) {
+        if (prn)
+            prefix_copy(&rnh->resolved_route, &prn->p);
+        else {
+                /*
+                * Just quickly store the family of the resolved
+                * route so that we can reset it in a second here
+                */
+                int family = rnh->resolved_route.family;
+
+                memset(&rnh->resolved_route, 0, sizeof(struct prefix));
+                rnh->resolved_route.family = family;
+        }
+
+        copy_state(rnh, re, nrn);
+        state_changed = 1;
+    } else if (compare_state(re, rnh->state)) {
+        zebra_rnh_refresh_dependents(rnh);
+        copy_state(rnh, re, nrn);
+    }
+    zebra_rnh_store_in_routing_table(rnh);
+    ...
+}
+```
 
 In step 1.7/2.4, a new flag ROUTE_ENTRY_NHG_ID_PRESERVED added in struct route_entry. The flag is set if the associated nhe's reachability is unchanged, after that rib_process() skip the routes which has this flag.
 
 ### Nexthop Group ID Handling
-The original approach of routes updating starts when zebra_rib_evaluate_rn_nexthops() function is called and stops when the route node's NHT list is empty. In other words, it stops when there are no nexthops resolving depending on this route node. During this backwalk process for route updating, the nexthop group of these routes is recreated, along with its ID being changed. However, at dplane/fpm level, there is no need to refresh the recursive nexthop group for prefix 2.2.2.2 and 100.0.0.1 again, since the reachability for both of them hasn't changed, and the nexthop group ID could remain unchanged.
+As previous section, the original approach of routes updating starts when zebra_rib_evaluate_rn_nexthops() function is called and stops when the route node's NHT list is empty. In other words, it stops when there are no nexthops resolving depending on this route node. During this backwalk process for route updating, the nexthop group of these routes is recreated, along with its ID being changed. However, at dplane/fpm level, there is no need to refresh the recursive nexthop group for prefix 2.2.2.2 and 100.0.0.1 again, since the reachability for both of them hasn't changed, and the nexthop group ID could remain unchanged.
 
 <figure align=center>
     <img src="images/nhg_id_change.jpg" >
