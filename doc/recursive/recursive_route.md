@@ -316,12 +316,7 @@ static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
 					 struct route_node *prn,
 					 struct route_entry *re)
 {
-    int state_changed = 0;
-
-    /* If we're resolving over a different route, resolution has changed or
-    * the resolving route has some change (e.g., metric), there is a state
-    * change.
-    */
+    ...
     zebra_rnh_remove_from_routing_table(rnh);
     if (!prefix_same(&rnh->resolved_route, prn ? &prn->p : NULL)) {
         if (prn)
