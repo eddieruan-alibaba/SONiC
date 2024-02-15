@@ -23,13 +23,13 @@
       - [struct route\_entry](#struct-route_entry)
       - [struct rnh](#struct-rnh)
     - [The Handling of zebra\_rnh\_refresh\_dependents()](#the-handling-of-zebra_rnh_refresh_dependents)
-  - [Nexthop Group ID Handling](#nexthop-group-id-handling)
+  - [Nexthop Group Preserving](#nexthop-group-preserving)
     - [Data Structure Modifications](#data-structure-modifications-1)
     - [The Handling of nexthop\_active\_update()](#the-handling-of-nexthop_active_update)
   - [Route Withdrawal](#route-withdrawal)
     - [Data Structure Modifications](#data-structure-modifications-2)
     - [Fast Convergence Handling](#fast-convergence-handling)
-  - [Dataplane refresh for Nexthop group change](#dataplane-refresh-for-nexthop-group-change)
+  - [Dataplane Refresh for Recursive route](#dataplane-refresh-for-recursive-route)
   - [FPM's new schema for recursive nexthop group](#fpms-new-schema-for-recursive-nexthop-group)
   - [Orchagent changes](#orchagent-changes)
 - [Unit Test](#unit-test)
@@ -40,7 +40,6 @@
   - [Test Case 4: BGP remote PE node failure](#test-case-4-bgp-remote-pe-node-failure)
   - [Test Case 5: Remote PE-CE link failure](#test-case-5-remote-pe-ce-link-failure)
 - [References](#references)
-
 
 ## Goal and Scope
 A recursive route is a routing mechanism in which the routing decision for a specific destination is determined by referring to another routing table, which is then looked up recursively until a final route is resolved. Recursive routing is a key concept in routing protocols and is often used in complex network topologies to ensure that data reaches its intended destination, even when that destination is not directly reachable from the originating device. In many cases, recursive routes are used in VPN or tunneling scenarios.
@@ -354,7 +353,7 @@ Explanation of the functions above:
 4. zebra_rnh_eval_dependents() walks back and find the routes depends on the nhe, then requeue the routes to working queue for rib_process() again. A new flag ROUTE_ENTRY_NHG_ID_PRESERVED (struct route_entry) is set for this route, to indicate that its recursive reachability is unchanged
 5. In each round of rib_process(), the rnh's resolving route status will be checked. The backwalk for fast convergence quits if it has ROUTE_ENTRY_NHG_ID_PRESERVED set or the NHT list is empty, then the status for ROUTE_ENTRY_NHG_ID_PRESERVED is also cleared
 
-### Nexthop Group ID Handling
+### Nexthop Group Preserving
 By the original approach of routes updating, the nexthop group of the route is recreated, along with its ID being changed. However, at dplane/fpm level, there is no need to refresh the nexthop group for recursive route again (e.g. for prefix 2.2.2.2 and 100.0.0.1), since the reachability hasn't changed. If the nexthop group remains unchanged, it means that the nhe for these nexthop groups can be reused and the dependents chain remain unchanged too.
 
 <figure align=center>
