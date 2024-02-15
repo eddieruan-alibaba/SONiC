@@ -354,7 +354,7 @@ Explanation of the functions above:
 5. In each round of rib_process(), the rnh's resolving route status will be checked in zebra_rnh_eval_nexthop_entry(). The backwalk for fast route convergence stops if it has ROUTE_ENTRY_NHG_ID_PRESERVED set or the rnh list is empty, after that the status for ROUTE_ENTRY_NHG_ID_PRESERVED is also cleared
 
 ### Nexthop Group Preserving
-By the original approach of routes updating, the nexthop group of the route is recreated, along with its ID being changed. However, at dplane/fpm level, there is no need to refresh the nexthop group for recursive route again (e.g. for prefix 2.2.2.2 and 100.0.0.1), since the reachability hasn't changed. If the nexthop group remains unchanged, it means that the nhe for these nexthop groups can be reused and the dependents chain remain unchanged too.
+By the original approach of routes updating, the nexthop group of the route is recreated, along with its ID being changed. However, at dplane/fpm level, there is no need to refresh the nexthop group for recursive route again (e.g. the red ones for prefix 2.2.2.2 and 100.0.0.1), since the reachability hasn't changed. If the nexthop group remains unchanged, it means that the nhe for these nexthop groups can be reused and the dependents chain remain unchanged too.
 
 <figure align=center>
     <img src="images/nhg_id_change.jpg" >
