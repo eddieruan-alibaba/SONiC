@@ -367,6 +367,7 @@ By the original approach of routes updating, the nexthop group of the route is r
 This new flag for struct route_entry indicates that the nexthop group shouldn't change during route's recursive resolving, it also implies that the route with this flag only has some nexthop path change, but the reachability of it remains same.
 
 #### The Handling of nexthop_active_update()
+The modification of nexthop_active_update() is that it preserves the associated nexthop group of routes with the ROUTE_ENTRY_NHG_ID_PRESERVED flag set during recursive route resolution, and recursively resolves them in place. After the resolution is complete, this nexthop group and its dependent nexthop groups remain unchanged, and no new nexthop groups are created.
 
 ### Fast Convergence for Route Withdrawal
 As the case of recursive routes for EVPN underlay
