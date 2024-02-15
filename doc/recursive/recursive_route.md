@@ -405,8 +405,8 @@ No Zebra original data structure modification is required as it leverages Zebra'
 #### Fast Convergence Handling
 Fast convergence for route withdrawal is also handled in the zebra_rnh_refresh_dependents(). The detailed is in the next section.
 
-### Dataplane refresh for Nexthop group change
-As the recursive nexthop group ID remains unchanged, Zebra is able to bypass forwarding this route to Dplane/FPM. In other words, the backwalk in Dplane/FPM terminates at the recursive route.
+### Dataplane Refresh for Recursive route
+TODO: As the recursive nexthop group and its dependents remain unchanged, Zebra is able to skip reinstall the route again? Instead of only update the nexthop group to kernel?
 
 ### FPM's new schema for recursive nexthop group
 We rely on BRCM and NTT's changes.
