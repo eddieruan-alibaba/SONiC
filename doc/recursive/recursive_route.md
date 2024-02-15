@@ -298,7 +298,7 @@ Provide a brief description of Zebra's original recursive convergence process.
 
 Route/Nexthop dependents are built or refreshed from the bottom up with each invocation of zebra_rnh_eval_nexthop_entry().
 
-After the insertion of zebra_rnh_refresh_dependents into the original recursive convergence process.
+After the insertion of zebra_rnh_refresh_dependents() into the original recursive convergence process.
 
 <figure align=center>
     <img src="images/zebra_rnh_refresh_dependents.png" >
@@ -343,9 +343,9 @@ static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
 }
 ```
 
-Explanation of each step:
+Explanation of the functions above:
 
-- step 1.7/2.4, a new flag ROUTE_ENTRY_NHG_ID_PRESERVED added in struct route_entry. The flag is set if the associated nhe's reachability is unchanged, after that rib_process() skip the routes which has this flag.
+1. a new flag ROUTE_ENTRY_NHG_ID_PRESERVED added in struct route_entry. The flag is set if the associated nhe's reachability is unchanged, after that rib_process() skip the routes which has this flag.
 
 ### Nexthop Group ID Handling
 As previous section, the original approach of routes updating starts when zebra_rib_evaluate_rn_nexthops() function is called and stops when the route node's NHT list is empty. In other words, it stops when there are no nexthops resolving depending on this route node. During this backwalk process for route updating, the nexthop group of these routes is recreated, along with its ID being changed. However, at dplane/fpm level, there is no need to refresh the recursive nexthop group for prefix 2.2.2.2 and 100.0.0.1 again, since the reachability for both of them hasn't changed, and the nexthop group ID could remain unchanged.
