@@ -352,11 +352,11 @@ Explanation of the functions above:
 5. In each round of rib_process(), the rnh's resolving route status will be checked. The backwalk for fast convergence quits if it has ROUTE_ENTRY_NHG_ID_PRESERVED set,then the status for ROUTE_ENTRY_NHG_ID_PRESERVED is also cleared
 
 ### Nexthop Group ID Handling
-As previous section, the original approach of routes updating starts when zebra_rib_evaluate_rn_nexthops() function is called and stops when the route node's NHT list is empty. In other words, it stops when there are no nexthops resolving depending on this route node. During this backwalk process for route updating, the nexthop group of these routes is recreated, along with its ID being changed. However, at dplane/fpm level, there is no need to refresh the recursive nexthop group for prefix 2.2.2.2 and 100.0.0.1 again, since the reachability for both of them hasn't changed, and the nexthop group ID could remain unchanged.
+By the original approach of routes updating, the nexthop group of the route is recreated, along with its ID being changed. However, at dplane/fpm level, there is no need to refresh the nexthop group for recursive route again (e.g. for prefix 2.2.2.2 and 100.0.0.1), since the reachability hasn't changed. If the nexthop group remains unchanged, it means that the nhe for these nexthop groups can be reused and the dependents chain remain unchanged too.
 
 <figure align=center>
     <img src="images/nhg_id_change.jpg" >
-    <figcaption>Figure 5.  ID change for route convergence<figcaption>
+    <figcaption>Figure 5.  nexthop group changes when route convergence<figcaption>
 </figure>
 
 #### Data Structure Modifications
