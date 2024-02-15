@@ -348,8 +348,8 @@ Explanation of the functions above:
 1. rib_process() eventually calls zebra_rnh_eval_nexthop_entry() after finishing the route updating task
 2. zebra_rnh_eval_nexthop_entry() see if a tracked nexthop entry (rnh) has undergone any change, If the rnh's resolution has changed, then it meets the fast convergence condition, zebra_rnh_refresh_dependents() is invoked, otherwise, the original protocol client notify mechanism is used, as step 6, zebra_rnh_notify_protocol_clients()
 3. zebra_rnh_refresh_dependents() finds the corresponding nexthop group (nhe), then uses this nhe as parameter for zebra_rnh_eval_dependents()
-4. zebra_rnh_eval_dependents() walks back and find the routes depends on the nhe, then requeue the routes to working queue for rib_process() again. A new flag ROUTE_ENTRY_NHG_ID_PRESERVED (struct route_entry) is set also, to indicate that this recursive route's reachability is unchanged
-5. 
+4. zebra_rnh_eval_dependents() walks back and find the routes depends on the nhe, then requeue the routes to working queue for rib_process() again. A new flag ROUTE_ENTRY_NHG_ID_PRESERVED (struct route_entry) is set for this route, to indicate that its recursive reachability is unchanged
+5. In each round of rib_process(), the rnh's resolving route status will be checked. The backwalk for fast convergence quits if it has ROUTE_ENTRY_NHG_ID_PRESERVED set,then the status for ROUTE_ENTRY_NHG_ID_PRESERVED is also cleared
 
 ### Nexthop Group ID Handling
 As previous section, the original approach of routes updating starts when zebra_rib_evaluate_rn_nexthops() function is called and stops when the route node's NHT list is empty. In other words, it stops when there are no nexthops resolving depending on this route node. During this backwalk process for route updating, the nexthop group of these routes is recreated, along with its ID being changed. However, at dplane/fpm level, there is no need to refresh the recursive nexthop group for prefix 2.2.2.2 and 100.0.0.1 again, since the reachability for both of them hasn't changed, and the nexthop group ID could remain unchanged.
