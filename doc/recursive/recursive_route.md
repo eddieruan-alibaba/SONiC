@@ -17,7 +17,7 @@
   - [Route Update Trigger](#route-update-trigger)
 - [Requirements Overview](#requirements-overview)
 - [High Level Design](#high-level-design)
-  - [Fast Convergence for Route Add and Updating](#fast-convergence-for-route-add-and-updating)
+  - [Route Add and Updating](#route-add-and-updating)
     - [Data Structure Modifications](#data-structure-modifications)
       - [struct nhg\_hash\_entry](#struct-nhg_hash_entry)
       - [struct route\_entry](#struct-route_entry)
@@ -26,7 +26,7 @@
   - [Nexthop Group ID Handling](#nexthop-group-id-handling)
     - [Data Structure Modifications](#data-structure-modifications-1)
     - [The Handling of nexthop\_active\_update()](#the-handling-of-nexthop_active_update)
-  - [Fast Convergence for Route Withdrawal](#fast-convergence-for-route-withdrawal)
+  - [Route Withdrawal](#route-withdrawal)
     - [Data Structure Modifications](#data-structure-modifications-2)
     - [Fast Convergence Handling](#fast-convergence-handling)
   - [Dataplane refresh for Nexthop group change](#dataplane-refresh-for-nexthop-group-change)
@@ -40,6 +40,7 @@
   - [Test Case 4: BGP remote PE node failure](#test-case-4-bgp-remote-pe-node-failure)
   - [Test Case 5: Remote PE-CE link failure](#test-case-5-remote-pe-ce-link-failure)
 - [References](#references)
+
 
 ## Goal and Scope
 A recursive route is a routing mechanism in which the routing decision for a specific destination is determined by referring to another routing table, which is then looked up recursively until a final route is resolved. Recursive routing is a key concept in routing protocols and is often used in complex network topologies to ensure that data reaches its intended destination, even when that destination is not directly reachable from the originating device. In many cases, recursive routes are used in VPN or tunneling scenarios.
@@ -130,7 +131,7 @@ This HLD focus on Zebra and introduces two enhancements for the recursive route.
 
 ## High Level Design
 
-### Fast Convergence for Route Add and Updating
+### Route Add and Updating
 Consider the case of recursive routes for EVPN underlay
 
     B>  2.2.2.2/32 [200/0] (127) via 100.0.0.1 (recursive), weight 1, 00:00:02
@@ -371,7 +372,7 @@ This new flag for struct route_entry indicates that the nexthop group shouldn't 
 #### The Handling of nexthop_active_update()
 The modification of nexthop_active_update() is that it preserves the associated nexthop group of routes with the ROUTE_ENTRY_NHG_ID_PRESERVED flag set during recursive route resolution, and recursively resolves them in place. After the resolution is complete, this nexthop group and its dependent nexthop groups remain unchanged, and no new nexthop groups are created.
 
-### Fast Convergence for Route Withdrawal
+### Route Withdrawal
 As the case of recursive routes for EVPN underlay
 
     B>  2.2.2.2/32 [200/0] (127) via 100.0.0.1 (recursive), weight 1, 00:00:02
