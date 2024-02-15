@@ -301,7 +301,7 @@ Route/Nexthop dependents are built or refreshed from the bottom up with each inv
 After the insertion of zebra_rnh_refresh_dependents into the original recursive convergence process.
 
 <figure align=center>
-    <img src="images/zebra_rnh_refresh_dependents.jpg" >
+    <img src="images/zebra_rnh_refresh_dependents.png" >
     <figcaption>Figure 4. zebra_rnh_refresh_dependents()<figcaption>
 </figure>
 
