@@ -372,24 +372,7 @@ This new flag for struct route_entry indicates that the nexthop group shouldn't 
 The modification of nexthop_active_update() is that it preserves the associated nexthop group of routes with the ROUTE_ENTRY_NHG_ID_PRESERVED flag set during recursive route resolution, and recursively resolves them in place. After the resolution is complete, this nexthop group and its dependent nexthop groups remain unchanged, and no new nexthop groups are created.
 
 ### Route Withdrawal
-As the case of recursive routes for EVPN underlay
-
-    B>  2.2.2.2/32 [200/0] (127) via 100.0.0.1 (recursive), weight 1, 00:00:02
-      *                            via 10.1.0.65, Ethernet1, weight 1, 00:00:02
-      *                            via 10.1.0.66, Ethernet2, weight 1, 00:00:02
-      *                            via 10.1.0.67, Ethernet3, weight 1, 00:00:02
-                                 via 200.0.0.1 (recursive), weight 1, 00:00:02
-      *                            via 10.1.0.76, Ethernet4, weight 1, 00:00:02
-      *                            via 10.1.0.77, Ethernet5, weight 1, 00:00:02
-      *                            via 10.1.0.78, Ethernet6, weight 1, 00:00:02
-    B>* 100.0.0.0/24 [200/0] (123) via 10.1.0.65, Ethernet1, weight 1, 00:00:02
-      *                            via 10.1.0.66, Ethernet2, weight 1, 00:00:02
-      *                            via 10.1.0.67, Ethernet3, weight 1, 00:00:02
-    B>* 200.0.0.0/24 [200/0] (108) via 10.1.0.76, Ethernet4, weight 1, 00:00:53
-      *                            via 10.1.0.77, Ethernet5, weight 1, 00:00:53
-      *                            via 10.1.0.78, Ethernet6, weight 1, 00:00:53
-
-If the local interface Ethernet6 is down or the route "200.0.0.0/24 via 10.1.0.78, Ethernet6" receives an explicit withdrawal from the IGP node.
+As the case of recursive routes for EVPN underlay, if the local interface Ethernet6 is down or the route "200.0.0.0/24 via 10.1.0.78, Ethernet6" receives an explicit withdrawal from the IGP node.
 
 <figure align=center>
     <img src="images/route_delete.jpg" >
