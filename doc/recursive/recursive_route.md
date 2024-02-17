@@ -372,7 +372,7 @@ This new flag for struct route_entry indicates that the nexthop group shouldn't 
 The modification of nexthop_active_update() is that it preserves the associated nexthop group of routes with the ROUTE_ENTRY_NHG_ID_PRESERVED flag set during recursive route resolution, and recursively resolves them in place. After the resolution is complete, this nexthop group and its dependent nexthop groups remain unchanged, and no new nexthop groups are created.
 
 ### Route Withdrawal
-As the case of recursive routes for EVPN underlay, if the local interface Ethernet6 is down or the route "200.0.0.0/24 via 10.1.0.78, Ethernet6" receives an explicit withdrawal from the IGP node.
+As the case of recursive routes for EVPN underlay above, if the local interface Ethernet6 is down or the route "200.0.0.0/24 via 10.1.0.78, Ethernet6" receives an explicit withdrawal from the IGP node.
 
 <figure align=center>
     <img src="images/route_delete.jpg" >
