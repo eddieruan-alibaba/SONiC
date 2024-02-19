@@ -375,7 +375,7 @@ The modification of nexthop_active_update() is that it preserves the associated 
 As the case of recursive routes for EVPN underlay above, if the local interface Ethernet6 is down or the route "200.0.0.0/24 via 10.1.0.78, Ethernet6" receives an explicit withdrawal from the IGP node.
 
 <figure align=center>
-    <img src="images/route_delete.jpg" >
+    <img src="images/route_delete.png" >
     <figcaption>Figure 6. rib deletion<figcaption>
 </figure>
 
