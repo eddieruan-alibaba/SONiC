@@ -52,7 +52,7 @@ Because the Linux kernel lacks support for recursive routes, FRR Zebra flattens 
 This leads an issue discussed in the SONiC Routing Working Group (https://lists.sonicfoundation.dev/g/sonic-wg-routing/files/SRv6%20use%20case%20-%20Routing%20WG.pptx).
 
 <figure align=center>
-    <img src="images/srv6_igp2bgp.jpg" >
+    <img src="images/srv6_igp2bgp.png" >
     <figcaption>Figure 1. Alibaba issue Underlay routes flap affecting Overlay SRv6 routes <figcaption>
 </figure> 
 
