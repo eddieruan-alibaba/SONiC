@@ -294,7 +294,7 @@ This new function is inserted into the existing route convergence process, allow
 Provide a brief description of Zebra's original recursive convergence process.
 
 <figure align=center>
-    <img src="images/route_converge_original.jpg" >
+    <img src="images/route_converge_original.png" >
     <figcaption>Figure 3. route convergence process<figcaption>
 </figure>
 
