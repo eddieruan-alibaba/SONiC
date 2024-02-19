@@ -357,7 +357,7 @@ Explanation of the functions above:
 By the original approach of routes updating, the nexthop group of the route is recreated, along with its ID being changed. However, at dplane/fpm level, there is no need to refresh the nexthop group for recursive route again (e.g. the red ones for prefix 2.2.2.2 and 100.0.0.1), since the reachability hasn't changed. If the nexthop group remains unchanged, it means that the nhe for these nexthop groups can be reused and the dependents chain remain unchanged too.
 
 <figure align=center>
-    <img src="images/nhg_id_change.jpg" >
+    <img src="images/nhg_id_change.png" >
     <figcaption>Figure 5.  nexthop group changes when route convergence<figcaption>
 </figure>
 
