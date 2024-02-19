@@ -156,7 +156,7 @@ In this scenario, although the route for prefix 100.0.0.0/24 has a new added pat
 In order to enable Zebra to update routes without notifying protocol clients, it should be able to obtain the route node associated with the nexthop group that has undergone changes. Some back pointer fields need to be added.
 
 <figure align=center>
-    <img src="images/data_struct.jpg" >
+    <img src="images/data_struct.png" >
     <figcaption>Figure 2. data structure modification for routes update<figcaption>
 </figure>
 
