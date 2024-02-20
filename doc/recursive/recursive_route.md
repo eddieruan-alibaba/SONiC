@@ -134,19 +134,19 @@ This HLD focus on Zebra and introduces two enhancements for the recursive route.
 Consider the case of recursive routes for EVPN underlay
 
     B>  2.2.2.2/32 [200/0] (127) via 100.0.0.1 (recursive), weight 1, 00:00:02
-      *                            via 10.1.0.65, Ethernet1, weight 1, 00:00:02
-      *                            via 10.1.0.66, Ethernet2, weight 1, 00:00:02
-      *                            via 10.1.0.67, Ethernet3, weight 1, 00:00:02
+      *                            via 10.1.0.66, Ethernet1, weight 1, 00:00:02
+      *                            via 10.1.0.67, Ethernet2, weight 1, 00:00:02
+      *                            via 10.1.0.68, Ethernet3, weight 1, 00:00:02
                                  via 200.0.0.1 (recursive), weight 1, 00:00:02
-      *                            via 10.1.0.76, Ethernet4, weight 1, 00:00:02
-      *                            via 10.1.0.77, Ethernet5, weight 1, 00:00:02
-      *                            via 10.1.0.78, Ethernet6, weight 1, 00:00:02
-    B>* 100.0.0.0/24 [200/0] (123) via 10.1.0.65, Ethernet1, weight 1, 00:00:02
-      *                            via 10.1.0.66, Ethernet2, weight 1, 00:00:02
-      *                            via 10.1.0.67, Ethernet3, weight 1, 00:00:02
-    B>* 200.0.0.0/24 [200/0] (108) via 10.1.0.76, Ethernet4, weight 1, 00:00:53
-      *                            via 10.1.0.77, Ethernet5, weight 1, 00:00:53
-      *                            via 10.1.0.78, Ethernet6, weight 1, 00:00:53
+      *                            via 20.1.0.66, Ethernet4, weight 1, 00:00:02
+      *                            via 20.1.0.67, Ethernet5, weight 1, 00:00:02
+      *                            via 20.1.0.68, Ethernet6, weight 1, 00:00:02
+    B>* 100.0.0.0/24 [200/0] (123) via 10.1.0.66, Ethernet1, weight 1, 00:00:02
+      *                            via 10.1.0.67, Ethernet2, weight 1, 00:00:02
+      *                            via 10.1.0.68, Ethernet3, weight 1, 00:00:02
+    B>* 200.0.0.0/24 [200/0] (108) via 20.1.0.66, Ethernet4, weight 1, 00:00:53
+      *                            via 20.1.0.67, Ethernet5, weight 1, 00:00:53
+      *                            via 20.1.0.68, Ethernet6, weight 1, 00:00:53
 
 As described in the above section, if the path 10.1.0.67 for prefix 100.0.0.0/24 is new added, Zebra will explicitly update both routes for recursive convergence with the help of the BGP client, one for the prefix 100.0.0.0/24 and another for the prefix 2.2.2.2/32.
 
