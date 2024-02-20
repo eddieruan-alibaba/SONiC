@@ -369,6 +369,16 @@ By the original approach of routes updating, once the IGP routing changes, NHG r
 
 However, at dplane/fpm level, there is no need to refresh the nexthop group for recursive route again (e.g. the red ones for prefix 2.2.2.2 and 200.0.0.1), since the reachability hasn't changed. If the nexthop group remains unchanged, it means that the nhe for these nexthop groups can be reused and the dependents chain remain unchanged too.
 
+<figure align=center>
+    <img src="images/nhg_change3.png" >
+    <figcaption>Figure 7. NHG dependents preserved<figcaption>
+</figure>
+
+<figure align=center>
+    <img src="images/nhg_change4.png" >
+    <figcaption>Figure 8. NHG dependents preserved (IGP node 10.0.1.28 is up)<figcaption>
+</figure>
+
 #### Data Structure Modifications
 ``` c
 /* The nexthop group id should remain unchanged during resolving */
