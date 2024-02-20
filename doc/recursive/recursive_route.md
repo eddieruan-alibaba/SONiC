@@ -359,7 +359,12 @@ By the original approach of routes updating, the nexthop group of the route is r
 
 <figure align=center>
     <img src="images/nhg_change1.png" >
-    <figcaption>Figure 5.  nexthop group changes when route convergence<figcaption>
+    <figcaption>Figure 5.  nexthop group dependents<figcaption>
+</figure>
+
+<figure align=center>
+    <img src="images/nhg_change2.png" >
+    <figcaption>Figure 6.  nexthop group dependents node <figcaption>
 </figure>
 
 #### Data Structure Modifications
