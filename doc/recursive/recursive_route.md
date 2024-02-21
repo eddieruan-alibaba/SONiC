@@ -26,6 +26,7 @@
   - [Nexthop Group Preserving](#nexthop-group-preserving)
     - [Data Structure Modifications](#data-structure-modifications-1)
     - [The Handling of nexthop\_active\_update()](#the-handling-of-nexthop_active_update)
+    - [The Handling of rib\_add\_multipath\_nhe()](#the-handling-of-rib_add_multipath_nhe)
   - [Route Withdrawal](#route-withdrawal)
     - [Data Structure Modifications](#data-structure-modifications-2)
     - [Fast Convergence Handling](#fast-convergence-handling)
