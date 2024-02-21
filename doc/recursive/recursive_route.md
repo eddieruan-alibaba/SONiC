@@ -30,6 +30,7 @@
   - [Route Withdrawal](#route-withdrawal)
     - [Data Structure Modifications](#data-structure-modifications-2)
     - [Fast Convergence Handling for Route Withdrawal](#fast-convergence-handling-for-route-withdrawal)
+  - [Special Considerations for EVPN Overlay Routes](#special-considerations-for-evpn-overlay-routes)
   - [Dataplane Refresh for Recursive route](#dataplane-refresh-for-recursive-route)
   - [FPM's new schema for recursive nexthop group](#fpms-new-schema-for-recursive-nexthop-group)
   - [Orchagent changes](#orchagent-changes)
@@ -414,6 +415,9 @@ As described in the "route updating" section.
 
 #### Fast Convergence Handling for Route Withdrawal
 As described in the "route updating" section.
+
+### Special Considerations for EVPN Overlay Routes
+TODO:
 
 ### Dataplane Refresh for Recursive route
 TODO: As the recursive nexthop group and its dependents remain unchanged, Zebra is able to skip reinstall the route again? Instead of only update the nexthop group to kernel?
