@@ -369,6 +369,8 @@ By the original approach of routes updating, once the IGP routing changes, NHG r
 
 However, for the view of the reachability of NHG 68, 61, 62, there is no need to refresh them for recursive route again (68 for prefix 2.2.2.2 and 61, 62 for 200.0.0.1), since the reachability hasn't changed. If these NHGs remain unchanged, it means that the nhe for them can be reused and the dependents chain have no changes too.
 
+After introducing the "Nexthop Group Preserving" enhancement, the desired goal is as illustrated in the following diagram.
+
 <figure align=center>
     <img src="images/nhg_change3.png" >
     <figcaption>Figure 7. NHG dependents preserved<figcaption>
@@ -379,6 +381,8 @@ However, for the view of the reachability of NHG 68, 61, 62, there is no need to
     <figcaption>Figure 8. NHG dependents preserved (IGP node 10.0.1.28 is up)<figcaption>
 </figure>
 
+The dependent NHG chain all the way up for the newly added path NHG 73 remains untouched.
+
 #### Data Structure Modifications
 ``` c
 /* The nexthop group id should remain unchanged during resolving */
@@ -387,7 +391,10 @@ However, for the view of the reachability of NHG 68, 61, 62, there is no need to
 This new flag for struct route_entry indicates that the nexthop group shouldn't change during route's recursive resolving, it also implies that the route with this flag only has some nexthop path change, but the reachability of it remains same.
 
 #### The Handling of nexthop_active_update()
-The modification of nexthop_active_update() is that it preserves the associated nexthop group of routes with the ROUTE_ENTRY_NHG_ID_PRESERVED flag set during recursive route resolution, and recursively resolves them in place. After the resolution is complete, this nexthop group and its dependent nexthop groups remain unchanged, and no new nexthop groups are created.
+The modification made to nexthop_active_update() preserves the associated nexthop group of routes with the ROUTE_ENTRY_NHG_ID_PRESERVED flag set during recursive route resolution. It recursively resolves them in place. Once the resolution is complete, the nexthop group itself is reused, and no new nexthop groups are created.
+
+#### The Handling of rib_add_multipath_nhe()
+TODO: this function need to change?
 
 ### Route Withdrawal
 As the case of recursive routes for EVPN underlay above, if the local interface Ethernet6 is down or the route "200.0.0.0/24 via 10.1.0.78, Ethernet6" receives an explicit withdrawal from the IGP node.
