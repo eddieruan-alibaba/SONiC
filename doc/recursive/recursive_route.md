@@ -407,6 +407,8 @@ Assuming interface Ethernet6 is down, in the context of "Nexthop Group Preservin
     <figcaption>Figure 9. NHG dependents preserved (Ethernet6 is down)<figcaption>
 </figure>
 
+The dependent NHG chain all the way up from NHG 62 is untouched.
+
 #### Data Structure Modifications
 As described in the "route updating" section.
 
