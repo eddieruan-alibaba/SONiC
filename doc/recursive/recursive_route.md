@@ -374,12 +374,7 @@ After introducing the "Nexthop Group Preserving" enhancement, the desired goal i
 
 <figure align=center>
     <img src="images/nhg_change3.png" >
-    <figcaption>Figure 7. NHG dependents preserved<figcaption>
-</figure>
-
-<figure align=center>
-    <img src="images/nhg_change4.png" >
-    <figcaption>Figure 8. NHG dependents preserved (IGP node 10.0.1.28 is up)<figcaption>
+    <figcaption>Figure 7. NHG dependents preserved (IGP node 10.0.1.28 is up)<figcaption>
 </figure>
 
 The dependent NHG chain all the way up for the newly added path NHG 73 remains untouched.
@@ -402,7 +397,7 @@ As the case of recursive routes for EVPN underlay above, if the local interface 
 
 <figure align=center>
     <img src="images/route_delete.png" >
-    <figcaption>Figure 6. rib deletion<figcaption>
+    <figcaption>Figure 8. rib deletion<figcaption>
 </figure>
 
 Rib deletion for interface down or route withdrawal is handled in rib_process(), then zebra_rnh_refresh_dependents() also handles route withdrawal case.
@@ -427,34 +422,34 @@ We rely on BRCM and NTT's changes.
 ### Test Case 1: local link failure
 <figure align=center>
     <img src="images/testcase1.png" >
-    <figcaption>Figure 7.local link failure <figcaption>
+    <figcaption>Figure 9.local link failure <figcaption>
 </figure>
 
 ### Test Case 2: IGP remote link/node failure
 <figure align=center>
     <img src="images/testcase2.png" >
-    <figcaption>Figure 8. IGP remote link/node failure
+    <figcaption>Figure 10. IGP remote link/node failure
  <figcaption>
 </figure>
 
 ### Test Case 3: IGP remote PE failure
 <figure align=center>
     <img src="images/testcase3.png" >
-    <figcaption>Figure 9. IGP remote PE failure
+    <figcaption>Figure 11. IGP remote PE failure
  <figcaption>
 </figure>
 
 ### Test Case 4: BGP remote PE node failure
 <figure align=center>
     <img src="images/testcase4.png" >
-    <figcaption>Figure 10. BGP remote PE node failure
+    <figcaption>Figure 12. BGP remote PE node failure
  <figcaption>
 </figure>
 
 ### Test Case 5: Remote PE-CE link failure
 <figure align=center>
     <img src="images/testcase5.png" >
-    <figcaption>Figure 11. Remote PE-CE link failure
+    <figcaption>Figure 13. Remote PE-CE link failure
  <figcaption>
 </figure>
 
