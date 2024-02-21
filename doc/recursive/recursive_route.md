@@ -29,7 +29,7 @@
     - [The Handling of rib\_add\_multipath\_nhe()](#the-handling-of-rib_add_multipath_nhe)
   - [Route Withdrawal](#route-withdrawal)
     - [Data Structure Modifications](#data-structure-modifications-2)
-    - [Fast Convergence Handling](#fast-convergence-handling)
+    - [Fast Convergence Handling for Route Withdrawal](#fast-convergence-handling-for-route-withdrawal)
   - [Dataplane Refresh for Recursive route](#dataplane-refresh-for-recursive-route)
   - [FPM's new schema for recursive nexthop group](#fpms-new-schema-for-recursive-nexthop-group)
   - [Orchagent changes](#orchagent-changes)
