@@ -377,7 +377,7 @@ After introducing the "Nexthop Group Preserving" enhancement, the desired goal i
     <figcaption>Figure 7. NHG dependents preserved (IGP node 10.0.1.28 is up)<figcaption>
 </figure>
 
-The dependent NHG chain all the way up for the newly added path NHG 73 remains untouched.
+The dependent NHG chain all the way up for the newly added path NHG 64 is untouched.
 
 #### Data Structure Modifications
 ``` c
@@ -393,20 +393,25 @@ The modification made to nexthop_active_update() preserves the associated nextho
 TODO: Route adding part for this function need to be tuned. In the case of that the new route entry replaces the old one, we need to reuse the original nhe and only updates its associated nhg to the new ones, then attach it to the new route entry and set ROUTE_ENTRY_NHG_ID_PRESERVED to this route entry. This may achieve the goal of preserving NHG?
 
 ### Route Withdrawal
-As the case of recursive routes for EVPN underlay above, if the local interface Ethernet6 is down or the route "200.0.0.0/24 via 10.1.0.78, Ethernet6" receives an explicit withdrawal from the IGP node.
+As shown in the example of recursive routes for EVPN underlay above, rib deletion is triggered by the local interface going down or by an explicit route withdrawal message from the BGP client. It is handled in rib_gc_dest(), while zebra_rnh_refresh_dependents() is called for all the rnh that depend on the removed route. So route withdrawal shares the same logic of route updating.
 
 <figure align=center>
     <img src="images/route_delete.png" >
-    <figcaption>Figure 8. rib deletion<figcaption>
+    <figcaption>Figure 8. rib deletion code path<figcaption>
 </figure>
 
-Rib deletion for interface down or route withdrawal is handled in rib_process(), then zebra_rnh_refresh_dependents() also handles route withdrawal case.
+Assuming interface Ethernet6 is down, in the context of "Nexthop Group Preserving", the nexthop group dependent state is as illustrated in the following diagram
+
+<figure align=center>
+    <img src="images/nhg_change4.png" >
+    <figcaption>Figure 9. NHG dependents preserved (Ethernet6 is down)<figcaption>
+</figure>
 
 #### Data Structure Modifications
-No Zebra original data structure modification is required as it leverages Zebra's nexthop group dependents chain.
+As described in the "route updating" section.
 
-#### Fast Convergence Handling
-Fast convergence for route withdrawal is also handled in the zebra_rnh_refresh_dependents(). The detailed is in the next section.
+#### Fast Convergence Handling for Route Withdrawal
+As described in the "route updating" section.
 
 ### Dataplane Refresh for Recursive route
 TODO: As the recursive nexthop group and its dependents remain unchanged, Zebra is able to skip reinstall the route again? Instead of only update the nexthop group to kernel?
@@ -422,34 +427,34 @@ We rely on BRCM and NTT's changes.
 ### Test Case 1: local link failure
 <figure align=center>
     <img src="images/testcase1.png" >
-    <figcaption>Figure 9.local link failure <figcaption>
+    <figcaption>Figure 10.local link failure <figcaption>
 </figure>
 
 ### Test Case 2: IGP remote link/node failure
 <figure align=center>
     <img src="images/testcase2.png" >
-    <figcaption>Figure 10. IGP remote link/node failure
+    <figcaption>Figure 11. IGP remote link/node failure
  <figcaption>
 </figure>
 
 ### Test Case 3: IGP remote PE failure
 <figure align=center>
     <img src="images/testcase3.png" >
-    <figcaption>Figure 11. IGP remote PE failure
+    <figcaption>Figure 12. IGP remote PE failure
  <figcaption>
 </figure>
 
 ### Test Case 4: BGP remote PE node failure
 <figure align=center>
     <img src="images/testcase4.png" >
-    <figcaption>Figure 12. BGP remote PE node failure
+    <figcaption>Figure 13. BGP remote PE node failure
  <figcaption>
 </figure>
 
 ### Test Case 5: Remote PE-CE link failure
 <figure align=center>
     <img src="images/testcase5.png" >
-    <figcaption>Figure 13. Remote PE-CE link failure
+    <figcaption>Figure 14. Remote PE-CE link failure
  <figcaption>
 </figure>
 
