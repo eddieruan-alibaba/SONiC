@@ -10,11 +10,11 @@
 ## Table of Content
 - [Goal and Scope](#goal-and-scope)
 - [Requirements Overview](#requirements-overview)
-- [FRR Current Approach for Recursive](#frr-current-approach-for-recursive)
+- [Zebra Current Approach for Recursive](#zebra-current-approach-for-recursive)
   - [Data Structure for Recursive Handling](#data-structure-for-recursive-handling)
     - [NH Dependency Tree](#nh-dependency-tree)
     - [NHT List from Route Node](#nht-list-from-route-node)
-    - [Recursive Route Handling](#recursive-route-handling)
+  - [Recursive Route Handling](#recursive-route-handling)
 - [High Level Design](#high-level-design)
   - [Triggers Events Route Convergence](#triggers-events-route-convergence)
   - [Route Add and Updating](#route-add-and-updating)
@@ -55,10 +55,8 @@ This HLD focus on Zebra and introduces two enhancements for the recursive route.
 - Fpm needs to add a new schema to take each member as nexthop group ID and update APP DB. (Rely on BRCM and NTT's changes)
 - Orchagent picks up event from APP DB and trigger nexthop group programming. Neighorch needs to handle this new schema without change too much on existing codes. (Rely on BRCM and NTT's changes)
 
-## FRR Current Approach for Recursive
-FRR Zebra uses struct nexthop to track next hop information. If it is a recursive nexthop, its flags field would be set NEXTHOP_FLAG_RECURSIVE bit and its resolved field stores a pointer which points a list of nexthops obtained by recursive resolution. Therefore Zebra keeps hierarchical relationships on the recursive nexthops. 
-
-Because the Linux kernel lacks support for recursive routes, FRR Zebra flattens the next-hop information of recursive routes when transferring it from Zebra to FPM or the Linux kernel. Currently, when a path goes down, Zebra would inform various protocol processes and let them replay routes update events accordingly. 
+## Zebra Current Approach for Recursive
+Zebra uses struct nexthop to track next hop information. If it is a recursive nexthop, its flags field would be set NEXTHOP_FLAG_RECURSIVE bit and its resolved field stores a pointer which points a list of nexthops obtained by recursive resolution. Therefore Zebra keeps hierarchical relationships on the recursive nexthops. Because the Linux kernel lacks support for recursive routes, FRR Zebra flattens the next-hop information of recursive routes when transferring it from Zebra to FPM or the Linux kernel. Currently, when a path goes down, Zebra would inform various protocol processes and let them replay routes update events accordingly. 
 
 This leads an issue discussed in the SONiC Routing Working Group (https://lists.sonicfoundation.dev/g/sonic-wg-routing/files/SRv6%20use%20case%20-%20Routing%20WG.pptx).
 
@@ -101,7 +99,7 @@ Each route node (struct rib_dest_t) contains an nht field, which stores all next
 
 This list is updated when a new route is added or a nexthop is registered by the protocol clients
 
-#### Recursive Route Handling
+### Recursive Route Handling
 The handling is carried out during the replay of route updates, and zebra_rib_evaluate_rn_nexthops() can be seen as the entry point for this process. It starts from the incoming route node and retrieves its NHT list. Then, it iterates through each nexthop(prefix) in the NHT list, utilizing the prefix to invoke zebra_evaluate_rnh(). This function works as follows:
 
 1. Identify the new route entry to resolve the nexthop
