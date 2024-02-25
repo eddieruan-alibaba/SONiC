@@ -9,14 +9,14 @@
 <!-- omit in toc -->
 ## Table of Content
 - [Goal and Scope](#goal-and-scope)
-- [FRR Current Approaches](#frr-current-approaches)
-- [Triggers Events](#triggers-events)
-- [FRR Data Structure for Recursive Handling](#frr-data-structure-for-recursive-handling)
-  - [NH Dependency Tree](#nh-dependency-tree)
-  - [NHT List from Route Node](#nht-list-from-route-node)
-  - [Recursive Route Handling](#recursive-route-handling)
 - [Requirements Overview](#requirements-overview)
+- [FRR Current Approach for Recursive](#frr-current-approach-for-recursive)
+  - [Data Structure for Recursive Handling](#data-structure-for-recursive-handling)
+    - [NH Dependency Tree](#nh-dependency-tree)
+    - [NHT List from Route Node](#nht-list-from-route-node)
+    - [Recursive Route Handling](#recursive-route-handling)
 - [High Level Design](#high-level-design)
+  - [Triggers Events Route Convergence](#triggers-events-route-convergence)
   - [Route Add and Updating](#route-add-and-updating)
     - [Data Structure Modifications](#data-structure-modifications)
       - [struct nhg\_hash\_entry](#struct-nhg_hash_entry)
@@ -49,7 +49,13 @@ A recursive route is a routing mechanism in which the routing decision for a spe
 - This HLD focus on recursive route convergence handling. Since SONiC doesn't have MPLS VPN support in master, the testing would focus on EVPN and SRv6 VPN only. 
 - The approach applied to the handling of recursive routes in Per-VRF.
 
-## FRR Current Approaches
+## Requirements Overview
+This HLD focus on Zebra and introduces two enhancements for the recursive route. The first is to recalculate the route change(add/update/withdrawal) independently, without relying on the protocol client. The second is to optimize the convergence logic of recursive specially for route withdrawal. If Zebra serves as the control plane, then corresponding adjustments may be made to FPM and Orchagent to collaborate with it, thereby enhancing the overall efficiency of route convergence.
+
+- Fpm needs to add a new schema to take each member as nexthop group ID and update APP DB. (Rely on BRCM and NTT's changes)
+- Orchagent picks up event from APP DB and trigger nexthop group programming. Neighorch needs to handle this new schema without change too much on existing codes. (Rely on BRCM and NTT's changes)
+
+## FRR Current Approach for Recursive
 FRR Zebra uses struct nexthop to track next hop information. If it is a recursive nexthop, its flags field would be set NEXTHOP_FLAG_RECURSIVE bit and its resolved field stores a pointer which points a list of nexthops obtained by recursive resolution. Therefore Zebra keeps hierarchical relationships on the recursive nexthops. 
 
 Because the Linux kernel lacks support for recursive routes, FRR Zebra flattens the next-hop information of recursive routes when transferring it from Zebra to FPM or the Linux kernel. Currently, when a path goes down, Zebra would inform various protocol processes and let them replay routes update events accordingly. 
@@ -63,19 +69,8 @@ This leads an issue discussed in the SONiC Routing Working Group (https://lists.
 
 To solve this issue, we need to introduce Prefix Independent Convergence (PIC) to FRR/SONiC. PIC concept is described in IEFT https://datatracker.ietf.org/doc/draft-ietf-rtgwg-bgp-pic/. It is not a BGP feature, but a RIB/FIB feeature on the device. PIC has two basic concepts, PIC core and PIC edge. The following HLD focuses on PIC edge's enhancement https://datatracker.ietf.org/doc/draft-ietf-rtgwg-bgp-pic/. This HLD is outline an approach which could prevent BGP load balancing updates from being triggered by IGP load balancing updates, a.k.a PIC core approach for the recursive VPN route support. 
 
-## Triggers Events
-Here are a list of trigger events which we want to take care for getting recursive routes convergence and minimizing hardware traffic loss. 
-
-| Trigger Types |     Events    |       Possible handling          | 
-|:---|:-----------|:----------------------|
-| Case 1: IGP local failure | A local link goes down | Currently Orchagent handles local link down event and triggers a quick fixup which removes the failed path in HW ECMP. Zebra will be triggered from connected_down() handling. BGP may be informed to install a backup path if needed. This is a special PIC core case, a.k.a PIC local |
-| Case 2: IGP remote link/node failture  | A remote link goes down, IGP leaf's reachability is not changed, only IGP paths are updated. | IGP gets route withdraw events from IGP peer. It would inform zebra with updated paths. Zebra would be triggered from zread_route_add() with updated path list. It is the PIC core handling case. |
-| Case 3: IGP remote PE failure  | A remote PE node is unreachable in IGP domain. | IGP triggers IGP leaf delete event. Zebra will be triggered from zread_route_del(). It is the PIC edge handling case |
-| Case 4: BGP remote PE node failure  | BGP remote node down | It should be detected by IGP remote node down first before BGP reacts, a.k.a the same as the above steps. This is the PIC edge handling case.|
-| Case 5: Remote PE-CE link failure | This is remote PE's PIC local case.  | Remote PE will trigger PIC local handling for quick traffic fix up. Local PE will be updated after BGP gets informed. |
-
-## FRR Data Structure for Recursive Handling
-### NH Dependency Tree
+### Data Structure for Recursive Handling
+#### NH Dependency Tree
 struct nexthop contains two fields, *resolved and *reparent for tracking nexthop resolution's dependencies. 
 
 	/* Nexthops obtained by recursive resolution.
@@ -92,7 +87,7 @@ https://github.com/FRRouting/frr/blob/858cc75b434344ae0b25eccaf6eef03debe4a031/l
 
 In Zebra, when a routing entry is processed by rib_process(), it calls nexthop_active_update() to parse and refresh the nexthop active state. Then, *resolved is set to the nexthop of the route used to resolve this nexthop, and the flag NEXTHOP_FLAG_RECURSIVE is set to the nexthop to indicate its recursive state.
 
-### NHT List from Route Node
+#### NHT List from Route Node
 Each route node (struct rib_dest_t) contains an nht field, which stores all nexthop prefixes that depend on this route node.
 
 	/*
@@ -106,7 +101,7 @@ Each route node (struct rib_dest_t) contains an nht field, which stores all next
 
 This list is updated when a new route is added or a nexthop is registered by the protocol clients
 
-### Recursive Route Handling
+#### Recursive Route Handling
 The handling is carried out during the replay of route updates, and zebra_rib_evaluate_rn_nexthops() can be seen as the entry point for this process. It starts from the incoming route node and retrieves its NHT list. Then, it iterates through each nexthop(prefix) in the NHT list, utilizing the prefix to invoke zebra_evaluate_rnh(). This function works as follows:
 
 1. Identify the new route entry to resolve the nexthop
@@ -115,13 +110,18 @@ The handling is carried out during the replay of route updates, and zebra_rib_ev
 4. Zebra processes this route, then the route's nexthop is recursively resolved and also flattened
 6. At the end of route updating, zebra_rib_evaluate_rn_nexthops() is called with the route's NHT list, and then it returns to step 1. This loop procedure contributes to recursive route convergence
 
-## Requirements Overview
-This HLD focus on Zebra and introduces two enhancements for the recursive route. The first is to recalculate the route change(add/update/withdrawal) independently, without relying on the protocol client. The second is to optimize the convergence logic of recursive specially for route withdrawal. If Zebra serves as the control plane, then corresponding adjustments may be made to FPM and Orchagent to collaborate with it, thereby enhancing the overall efficiency of route convergence.
-
-- Fpm needs to add a new schema to take each member as nexthop group ID and update APP DB. (Rely on BRCM and NTT's changes)
-- Orchagent picks up event from APP DB and trigger nexthop group programming. Neighorch needs to handle this new schema without change too much on existing codes. (Rely on BRCM and NTT's changes)
-
 ## High Level Design
+
+### Triggers Events Route Convergence
+Here are a list of trigger events which we want to take care for getting recursive route convergence and minimizing hardware traffic loss. 
+
+| Trigger Types |     Events    |       Possible handling          | 
+|:---|:-----------|:----------------------|
+| Case 1: IGP local failure | A local link goes down | Currently Orchagent handles local link down event and triggers a quick fixup which removes the failed path in HW ECMP. Zebra will be triggered from connected_down() handling. BGP may be informed to install a backup path if needed. This is a special PIC core case, a.k.a PIC local |
+| Case 2: IGP remote link/node failture  | A remote link goes down, IGP leaf's reachability is not changed, only IGP paths are updated. | IGP gets route withdraw events from IGP peer. It would inform zebra with updated paths. Zebra would be triggered from zread_route_add() with updated path list. It is the PIC core handling case. |
+| Case 3: IGP remote PE failure  | A remote PE node is unreachable in IGP domain. | IGP triggers IGP leaf delete event. Zebra will be triggered from zread_route_del(). It is the PIC edge handling case |
+| Case 4: BGP remote PE node failure  | BGP remote node down | It should be detected by IGP remote node down first before BGP reacts, a.k.a the same as the above steps. This is the PIC edge handling case.|
+| Case 5: Remote PE-CE link failure | This is remote PE's PIC local case.  | Remote PE will trigger PIC local handling for quick traffic fix up. Local PE will be updated after BGP gets informed. |
 
 ### Route Add and Updating
 Consider the case of recursive routes for EVPN underlay
