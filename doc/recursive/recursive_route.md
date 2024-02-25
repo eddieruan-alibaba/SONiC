@@ -17,7 +17,7 @@
   - [Recursive Route Handling](#recursive-route-handling)
 - [High Level Design](#high-level-design)
   - [Triggers Events for Recursive Handling](#triggers-events-for-recursive-handling)
-  - [Route Add and Updating](#route-add-and-updating)
+  - [Optimization of Route Convergence Process](#optimization-of-route-convergence-process)
     - [Data Structure Modifications](#data-structure-modifications)
       - [struct nhg\_hash\_entry](#struct-nhg_hash_entry)
       - [struct route\_entry](#struct-route_entry)
@@ -121,7 +121,7 @@ Here are a list of trigger events which we want to take care for getting recursi
 | Case 4: BGP remote PE node failure  | BGP remote node down | It should be detected by IGP remote node down first before BGP reacts, a.k.a the same as the above steps. This is the PIC edge handling case.|
 | Case 5: Remote PE-CE link failure | This is remote PE's PIC local case.  | Remote PE will trigger PIC local handling for quick traffic fix up. Local PE will be updated after BGP gets informed. |
 
-### Route Add and Updating
+### Optimization of Route Convergence Process
 Consider the case of recursive routes for EVPN underlay
 
     B>  2.2.2.2/32 [200/0] via 100.0.0.1 (recursive), weight 1, 00:11:50
