@@ -10,8 +10,8 @@
 ## Table of Content
 - [Goal and Scope](#goal-and-scope)
 - [Requirements Overview](#requirements-overview)
-- [Zebra Current Approach for Nexthop Resolving](#zebra-current-approach-for-nexthop-resolving)
-  - [Data Structure for Recursive Nexthop Handling](#data-structure-for-recursive-nexthop-handling)
+- [Zebra Current Approach for Recursive Routes](#zebra-current-approach-for-recursive-routes)
+  - [Data Structure for Recursive Handling](#data-structure-for-recursive-handling)
     - [NH Dependency Tree](#nh-dependency-tree)
     - [NHT List from Route Node](#nht-list-from-route-node)
   - [Recursive Route Handling](#recursive-route-handling)
@@ -55,7 +55,7 @@ This HLD focuses on Zebra and introduces two enhancements for recursive routes. 
 - Fpm needs to add a new schema to take each member as nexthop group ID and update APP DB. (Rely on BRCM and NTT's changes)
 - Orchagent picks up event from APP DB and trigger nexthop group programming. Neighorch needs to handle this new schema without change too much on existing codes. (Rely on BRCM and NTT's changes)
 
-## Zebra Current Approach for Nexthop Resolving
+## Zebra Current Approach for Recursive Routes
 Zebra uses struct nexthop to track nexthop information. If it is a recursive nexthop, its flags field would be set NEXTHOP_FLAG_RECURSIVE bit and its resolved field stores a pointer which points a list of nexthops obtained by recursive resolution. Therefore Zebra keeps hierarchical relationships on the recursive nexthops. Because the Linux kernel lacks support for recursive routes, FRR Zebra flattens the next-hop information of recursive routes when transferring it from Zebra to FPM or the Linux kernel. Currently, when a path goes down, Zebra would inform various protocol processes and let them replay routes update events accordingly. 
 
 This leads an issue discussed in the SONiC Routing Working Group (https://lists.sonicfoundation.dev/g/sonic-wg-routing/files/SRv6%20use%20case%20-%20Routing%20WG.pptx).
@@ -67,7 +67,7 @@ This leads an issue discussed in the SONiC Routing Working Group (https://lists.
 
 To solve this issue, we need to introduce Prefix Independent Convergence (PIC) to FRR/SONiC. PIC concept is described in IEFT https://datatracker.ietf.org/doc/draft-ietf-rtgwg-bgp-pic/. It is not a BGP feature, but a RIB/FIB feeature on the device. PIC has two basic concepts, PIC core and PIC edge. The following HLD focuses on PIC edge's enhancement https://datatracker.ietf.org/doc/draft-ietf-rtgwg-bgp-pic/. This HLD is outline an approach which could prevent BGP load balancing updates from being triggered by IGP load balancing updates, a.k.a PIC core approach for the recursive VPN route support. 
 
-### Data Structure for Recursive Nexthop Handling
+### Data Structure for Recursive Handling
 #### NH Dependency Tree
 struct nexthop contains two fields, *resolved and *reparent for tracking nexthop resolution's dependencies. 
 
