@@ -10,13 +10,13 @@
 ## Table of Content
 - [Goal and Scope](#goal-and-scope)
 - [Requirements Overview](#requirements-overview)
-- [Zebra Current Approach for Recursive](#zebra-current-approach-for-recursive)
-  - [Data Structure for Recursive Handling](#data-structure-for-recursive-handling)
+- [Zebra Current Approach for Nexthop Resolving](#zebra-current-approach-for-nexthop-resolving)
+  - [Data Structure for Recursive Nexthop Handling](#data-structure-for-recursive-nexthop-handling)
     - [NH Dependency Tree](#nh-dependency-tree)
     - [NHT List from Route Node](#nht-list-from-route-node)
   - [Recursive Route Handling](#recursive-route-handling)
 - [High Level Design](#high-level-design)
-  - [Triggers Events Route Convergence](#triggers-events-route-convergence)
+  - [Triggers Events for Recursive Handling](#triggers-events-for-recursive-handling)
   - [Route Add and Updating](#route-add-and-updating)
     - [Data Structure Modifications](#data-structure-modifications)
       - [struct nhg\_hash\_entry](#struct-nhg_hash_entry)
@@ -50,13 +50,13 @@ A recursive route is a routing mechanism in which the routing decision for a spe
 - The approach applied to the handling of recursive routes in Per-VRF.
 
 ## Requirements Overview
-This HLD focus on Zebra and introduces two enhancements for the recursive route. The first is to recalculate the route change(add/update/withdrawal) independently, without relying on the protocol client. The second is to optimize the convergence logic of recursive specially for route withdrawal. If Zebra serves as the control plane, then corresponding adjustments may be made to FPM and Orchagent to collaborate with it, thereby enhancing the overall efficiency of route convergence.
+This HLD focuses on Zebra and introduces two enhancements for recursive routes. The first is to recalculate route changes (additions/updates/withdrawals) independently, without relying on the protocol client in certain cases. The second is to optimize the convergence logic of recursive route. If Zebra serves as the control plane, then corresponding adjustments may be made to FPM and Orchagent to collaborate with it, thereby enhancing the overall efficiency of route convergence.
 
 - Fpm needs to add a new schema to take each member as nexthop group ID and update APP DB. (Rely on BRCM and NTT's changes)
 - Orchagent picks up event from APP DB and trigger nexthop group programming. Neighorch needs to handle this new schema without change too much on existing codes. (Rely on BRCM and NTT's changes)
 
-## Zebra Current Approach for Recursive
-Zebra uses struct nexthop to track next hop information. If it is a recursive nexthop, its flags field would be set NEXTHOP_FLAG_RECURSIVE bit and its resolved field stores a pointer which points a list of nexthops obtained by recursive resolution. Therefore Zebra keeps hierarchical relationships on the recursive nexthops. Because the Linux kernel lacks support for recursive routes, FRR Zebra flattens the next-hop information of recursive routes when transferring it from Zebra to FPM or the Linux kernel. Currently, when a path goes down, Zebra would inform various protocol processes and let them replay routes update events accordingly. 
+## Zebra Current Approach for Nexthop Resolving
+Zebra uses struct nexthop to track nexthop information. If it is a recursive nexthop, its flags field would be set NEXTHOP_FLAG_RECURSIVE bit and its resolved field stores a pointer which points a list of nexthops obtained by recursive resolution. Therefore Zebra keeps hierarchical relationships on the recursive nexthops. Because the Linux kernel lacks support for recursive routes, FRR Zebra flattens the next-hop information of recursive routes when transferring it from Zebra to FPM or the Linux kernel. Currently, when a path goes down, Zebra would inform various protocol processes and let them replay routes update events accordingly. 
 
 This leads an issue discussed in the SONiC Routing Working Group (https://lists.sonicfoundation.dev/g/sonic-wg-routing/files/SRv6%20use%20case%20-%20Routing%20WG.pptx).
 
@@ -67,7 +67,7 @@ This leads an issue discussed in the SONiC Routing Working Group (https://lists.
 
 To solve this issue, we need to introduce Prefix Independent Convergence (PIC) to FRR/SONiC. PIC concept is described in IEFT https://datatracker.ietf.org/doc/draft-ietf-rtgwg-bgp-pic/. It is not a BGP feature, but a RIB/FIB feeature on the device. PIC has two basic concepts, PIC core and PIC edge. The following HLD focuses on PIC edge's enhancement https://datatracker.ietf.org/doc/draft-ietf-rtgwg-bgp-pic/. This HLD is outline an approach which could prevent BGP load balancing updates from being triggered by IGP load balancing updates, a.k.a PIC core approach for the recursive VPN route support. 
 
-### Data Structure for Recursive Handling
+### Data Structure for Recursive Nexthop Handling
 #### NH Dependency Tree
 struct nexthop contains two fields, *resolved and *reparent for tracking nexthop resolution's dependencies. 
 
@@ -97,20 +97,20 @@ Each route node (struct rib_dest_t) contains an nht field, which stores all next
 	 */
 	struct rnh_list_head nht;
 
-This list is updated when a new route is added or a nexthop is registered by the protocol clients
+This list is updated when a new route is added or a nexthop is registered by the protocol clients.
 
 ### Recursive Route Handling
 The handling is carried out during the replay of route updates, and zebra_rib_evaluate_rn_nexthops() can be seen as the entry point for this process. It starts from the incoming route node and retrieves its NHT list. Then, it iterates through each nexthop(prefix) in the NHT list, utilizing the prefix to invoke zebra_evaluate_rnh(). This function works as follows:
 
 1. Identify the new route entry to resolve the nexthop
-2. Compare the new route entry with the previous one, if they are not same, then update the nexthop resolving state as the new route entry, and then send a nexthop change notification to protocol clients
+2. Compare the new route entry with the previous one, if they are not same, update the nexthop resolving state as the new route entry, and then send a nexthop change notification to protocol clients
 3. Protocol clients recalculate the path associated with the nexthop, then resend the corresponding route to Zebra.
 4. Zebra processes this route, then the route's nexthop is recursively resolved and also flattened
 6. At the end of route updating, zebra_rib_evaluate_rn_nexthops() is called with the route's NHT list, and then it returns to step 1. This loop procedure contributes to recursive route convergence
 
 ## High Level Design
 
-### Triggers Events Route Convergence
+### Triggers Events for Recursive Handling
 Here are a list of trigger events which we want to take care for getting recursive route convergence and minimizing hardware traffic loss. 
 
 | Trigger Types |     Events    |       Possible handling          | 
