@@ -46,10 +46,10 @@
 ## Goal and Scope
 A recursive route is a routing mechanism in which the routing decision for a specific destination is determined by referring to another routing table, which is then looked up recursively until a final route is resolved. Recursive routing is a key concept in routing protocols and is often used in complex network topologies to ensure that data reaches its intended destination, even when that destination is not directly reachable from the originating device. In many cases, recursive routes are used in VPN or tunneling scenarios.
 
-- This HLD focus on recursive route convergence handling. since SONiC doesn't have MPLS VPN support in master, the testing would focus on EVPN and SRv6 VPN only. 
+- This HLD focus on recursive route convergence handling. Since SONiC doesn't have MPLS VPN support in master, the testing would focus on EVPN and SRv6 VPN only. 
 - The approach applied to the handling of recursive routes in Per-VRF.
 
-## FRR's Current Limitations
+## FRR Current Approaches
 FRR Zebra uses struct nexthop to track next hop information. If it is a recursive nexthop, its flags field would be set NEXTHOP_FLAG_RECURSIVE bit and its resolved field stores a pointer which points a list of nexthops obtained by recursive resolution. Therefore Zebra keeps hierarchical relationships on the recursive nexthops. 
 
 Because the Linux kernel lacks support for recursive routes, FRR Zebra flattens the next-hop information of recursive routes when transferring it from Zebra to FPM or the Linux kernel. Currently, when a path goes down, Zebra would inform various protocol processes and let them replay routes update events accordingly. 
@@ -64,7 +64,7 @@ This leads an issue discussed in the SONiC Routing Working Group (https://lists.
 To solve this issue, we need to introduce Prefix Independent Convergence (PIC) to FRR/SONiC. PIC concept is described in IEFT https://datatracker.ietf.org/doc/draft-ietf-rtgwg-bgp-pic/. It is not a BGP feature, but a RIB/FIB feeature on the device. PIC has two basic concepts, PIC core and PIC edge. The following HLD focuses on PIC edge's enhancement https://datatracker.ietf.org/doc/draft-ietf-rtgwg-bgp-pic/. This HLD is outline an approach which could prevent BGP load balancing updates from being triggered by IGP load balancing updates, a.k.a PIC core approach for the recursive VPN route support. 
 
 ## Triggers Events
-Here are a list of trigger events which we want to take care for getting faster routes convergence and minimizing hardware traffic loss. 
+Here are a list of trigger events which we want to take care for getting recursive routes convergence and minimizing hardware traffic loss. 
 
 | Trigger Types |     Events    |       Possible handling          | 
 |:---|:-----------|:----------------------|
@@ -74,7 +74,7 @@ Here are a list of trigger events which we want to take care for getting faster 
 | Case 4: BGP remote PE node failure  | BGP remote node down | It should be detected by IGP remote node down first before BGP reacts, a.k.a the same as the above steps. This is the PIC edge handling case.|
 | Case 5: Remote PE-CE link failure | This is remote PE's PIC local case.  | Remote PE will trigger PIC local handling for quick traffic fix up. Local PE will be updated after BGP gets informed. |
 
-## FRR Current Approaches for recursive handling
+## FRR Data Structure for Recursive Handling
 ### NH Dependency Tree
 struct nexthop contains two fields, *resolved and *reparent for tracking nexthop resolution's dependencies. 
 
@@ -106,7 +106,8 @@ Each route node (struct rib_dest_t) contains an nht field, which stores all next
 
 This list is updated when a new route is added or a nexthop is registered by the protocol clients
 
-The nexthop resolving is carried out during the replay of route updates, and zebra_rib_evaluate_rn_nexthops() can be seen as the entry point for this process. It starts from the incoming route node and retrieves its NHT list. Then, it iterates through each nexthop(prefix) in the NHT list, utilizing the prefix to invoke zebra_evaluate_rnh(). This function works as follows:
+### Recursive Route Handling
+The handling is carried out during the replay of route updates, and zebra_rib_evaluate_rn_nexthops() can be seen as the entry point for this process. It starts from the incoming route node and retrieves its NHT list. Then, it iterates through each nexthop(prefix) in the NHT list, utilizing the prefix to invoke zebra_evaluate_rnh(). This function works as follows:
 
 1. Identify the new route entry to resolve the nexthop
 2. Compare the new route entry with the previous one, if they are not same, then update the nexthop resolving state as the new route entry, and then send a nexthop change notification to protocol clients
