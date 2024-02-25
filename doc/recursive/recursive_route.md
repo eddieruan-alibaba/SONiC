@@ -9,12 +9,12 @@
 <!-- omit in toc -->
 ## Table of Content
 - [Goal and Scope](#goal-and-scope)
-- [FRR's Current Limitations](#frrs-current-limitations)
-- [Triggers Events](#triggers-events)
 - [FRR Current Approaches](#frr-current-approaches)
+- [Triggers Events](#triggers-events)
+- [FRR Data Structure for Recursive Handling](#frr-data-structure-for-recursive-handling)
   - [NH Dependency Tree](#nh-dependency-tree)
   - [NHT List from Route Node](#nht-list-from-route-node)
-  - [Route Update Trigger](#route-update-trigger)
+  - [Recursive Route Handling](#recursive-route-handling)
 - [Requirements Overview](#requirements-overview)
 - [High Level Design](#high-level-design)
   - [Route Add and Updating](#route-add-and-updating)
