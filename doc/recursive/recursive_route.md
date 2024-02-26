@@ -373,10 +373,7 @@ The dependent nexthops chain all the way up for the newly updated nexthop group 
 This flag for struct route_entry indicates that the nexthop group shouldn't change during route's recursive resolving, it also implies that the route with this flag only has some nexthop path change, but the reachability of it remains same.
 
 #### The Handling of nexthop_active_update()
-The modification made to nexthop_active_update() preserves the associated nexthop group of routes with the ROUTE_ENTRY_NHG_ID_PRESERVED flag set during recursive route resolution. It recursively resolves them in place. Once the resolution is complete, the nexthop group itself is reused, and no new nexthop groups are created.
-
-#### The Handling of rib_add_multipath_nhe()
-TODO: Route adding part for this function need to be tuned. In the case of that the new route entry replaces the old one, we need to reuse the original nhe and only updates its associated nhg to the new ones, then attach it to the new route entry and set ROUTE_ENTRY_NHG_ID_PRESERVED to this route entry. This may achieve the goal of preserving NHG?
+The modification made to nexthop_active_update() preserves the associated nexthop group of routes with the ROUTE_ENTRY_NHG_ID_PRESERVED flag set during recursive route resolution. It recursively resolves them in place. Once the resolution is complete, the nexthop group resolution is refreshed, and no new nexthop groups are created.
 
 ### Route Withdrawal
 As shown in the example of recursive routes for EVPN underlay above, rib deletion is triggered by the local interface going down or by an explicit route withdrawal message from the BGP client. It is handled in rib_gc_dest(), while zebra_rnh_refresh_dependents() is called for all the rnh that depend on the removed route. So route withdrawal shares the same logic of route updating.
