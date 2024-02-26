@@ -356,13 +356,11 @@ As previous section, once a route has some path changes, recursive route updatin
     <figcaption>Figure 6. nexthop dependents change<figcaption>
 </figure>
 
-However, for the view of the reachability of NHG 68, 61, 62, there is no need to refresh them for recursive route again (68 for prefix 2.2.2.2 and 61, 62 for 200.0.0.1), since the reachability hasn't changed. If these NHGs remain unchanged, it means that the nhe for them can be reused and the dependents chain have no changes too.
-
-After introducing the "Nexthop Group Preserving" enhancement, the desired goal is as illustrated in the following diagram.
+However, for the view of the reachability of nexthop 88, 89, there is no need to recreate them for recursive route updating again, since the reachability hasn't changed. After introducing the "Nexthop Group Preserving" enhancement, the desired goal is as illustrated in the following diagram.
 
 <figure align=center>
     <img src="images/nhg_change3.png" >
-    <figcaption>Figure 8. NHG dependents preserved (IGP node 10.0.1.28 is up)<figcaption>
+    <figcaption>Figure 7. NHG dependents preserved (IGP node 10.0.1.28 is up)<figcaption>
 </figure>
 
 The dependent NHG chain all the way up for the newly added path NHG 64 is untouched.
