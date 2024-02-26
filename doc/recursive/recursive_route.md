@@ -122,7 +122,24 @@ Here are a list of trigger events which we want to take care for getting recursi
 | Case 5: Remote PE-CE link failure | This is remote PE's PIC local case.  | Remote PE will trigger PIC local handling for quick traffic fix up. Local PE will be updated after BGP gets informed. |
 
 ### Nexthop Group Preserving
-By the original approach of routes updating, once the IGP routing changes, NHG refresh will proceed along the reverse path of dependency, so all NHGs on that direction will be recreated. As shown in the diagram, when the IGP node 10.0.1.28 is up, all dependent NHGs originating from it will be recreated, as indicated by the red text in the diagram.
+Consider the case of recursive routes for EVPN underlay
+
+    B>  2.2.2.2/32 [200/0] via 100.0.0.1 (recursive), weight 1, 00:11:50
+      *                      via 10.1.0.16, Ethernet1, weight 1, 00:11:50
+      *                      via 10.1.0.17, Ethernet2, weight 1, 00:11:50
+      *                      via 10.1.0.18, Ethernet3, weight 1, 00:11:50
+                           via 200.0.0.1 (recursive), weight 1, 00:11:50
+      *                      via 10.1.0.26, Ethernet4, weight 1, 00:11:50
+      *                      via 10.1.0.27, Ethernet5, weight 1, 00:11:50
+      *                      via 10.1.0.28, Ethernet6, weight 1, 00:11:50
+    B>* 100.0.0.0/24 [200/0] via 10.1.0.16, Ethernet1, weight 1, 00:11:57
+      *                      via 10.1.0.17, Ethernet2, weight 1, 00:11:57
+      *                      via 10.1.0.18, Ethernet3, weight 1, 00:11:57
+    B>* 200.0.0.0/24 [200/0] via 10.1.0.26, Ethernet4, weight 1, 00:11:50
+      *                      via 10.1.0.27, Ethernet5, weight 1, 00:11:50
+      *                      via 10.1.0.28, Ethernet6, weight 1, 00:11:50
+
+If the path 10.1.0.28 of prefix 200.0.0.0/24 is removed, Zebra will explicitly update both routes for recursive convergence with the help of the BGP client, one for 200.0.0.0/24 and another for 2.2.2.2/32. By the original approach of routes updating, nexthop resolving will proceed along the reverse path of dependency, so all nexthops on that direction will be recreated. As shown in the diagram, all dependent nexthops originating from 10.1.0.28 will be recreated, as indicated by the red text in the diagram.
 
 <figure align=center>
     <img src="images/nhg_change1.png" >
