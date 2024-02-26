@@ -139,7 +139,7 @@ Consider the case of recursive routes for EVPN underlay
       *                      via 10.1.0.27, Ethernet5, weight 1, 00:11:50
       *                      via 10.1.0.28, Ethernet6, weight 1, 00:11:50
 
-If the path 10.1.0.28 of prefix 200.0.0.0/24 is removed, Zebra will explicitly update both routes for recursive convergence with the help of the BGP client, one for 200.0.0.0/24 and another for 2.2.2.2/32. In this scenario, although the route 200.0.0.0/24 has one path removed, but its reachability for route 2.2.2.2/32 remains unchanged . Zebra has the dependency relationships between these recursive routes, so there is a chance to improve Zebra for route convergence by itself.
+If the path 10.1.0.28 of prefix 200.0.0.0/24 is removed, Zebra will explicitly update both routes for recursive convergence with the help of the BGP client, one for 200.0.0.0/24 and another for 2.2.2.2/32. In this scenario, although the route 200.0.0.0/24 has one path removed, but its reachability for route 2.2.2.2/32 remains unchanged . Zebra has the dependency relationships between these recursive routes, so there is a chance to improve Zebra for route convergence.
 
 <figure align=center>
     <img src="images/path_remove1.png" >
