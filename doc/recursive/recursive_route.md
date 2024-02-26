@@ -363,7 +363,7 @@ However, for the view of the reachability of nexthop 88, 89, there is no need to
     <figcaption>Figure 7. NHG dependents preserved<figcaption>
 </figure>
 
-The dependent NHG chain all the way up for the newly added path NHG 64 is untouched.
+The dependent nexthops chain all the way up for the newly updated nexthop group 90 is untouched.
 
 #### Data Structure Modifications
 ``` c
