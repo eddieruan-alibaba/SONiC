@@ -359,8 +359,8 @@ As previous section, once a route has some path changes, recursive route updatin
 However, for the view of the reachability of nexthop 88, 89, there is no need to recreate them for recursive route updating again, since the reachability hasn't changed. After introducing the "Nexthop Group Preserving" enhancement, the desired goal is as illustrated in the following diagram.
 
 <figure align=center>
-    <img src="images/nhg_change3.png" >
-    <figcaption>Figure 7. NHG dependents preserved (IGP node 10.0.1.28 is up)<figcaption>
+    <img src="images/nhg_change2.png" >
+    <figcaption>Figure 7. NHG dependents preserved<figcaption>
 </figure>
 
 The dependent NHG chain all the way up for the newly added path NHG 64 is untouched.
