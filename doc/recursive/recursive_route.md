@@ -4,7 +4,7 @@
 ## Revision
 | Rev |     Date    |       Author           | Change Description                |
 |:---:|:-----------:|:----------------------:|-----------------------------------|
-| 0.1 | Oct    2023 | Yongxin.Cao            | Initial Draft                     |
+| 0.1 | Oct    2023 |                        | Initial Draft                     |
 
 <!-- omit in toc -->
 ## Table of Content
@@ -17,16 +17,16 @@
   - [Recursive Route Handling](#recursive-route-handling)
 - [High Level Design](#high-level-design)
   - [Triggers Events for Recursive Handling](#triggers-events-for-recursive-handling)
-  - [Nexthop Group Preserving](#nexthop-group-preserving)
-    - [Data Structure Modifications](#data-structure-modifications)
-    - [The Handling of nexthop\_active\_update()](#the-handling-of-nexthop_active_update)
-    - [The Handling of rib\_add\_multipath\_nhe()](#the-handling-of-rib_add_multipath_nhe)
   - [Optimization of Recursive Route Handling](#optimization-of-recursive-route-handling)
-    - [Data Structure Modifications](#data-structure-modifications-1)
+    - [Data Structure Modifications](#data-structure-modifications)
       - [struct nhg\_hash\_entry](#struct-nhg_hash_entry)
       - [struct route\_entry](#struct-route_entry)
       - [struct rnh](#struct-rnh)
     - [The Handling of zebra\_rnh\_refresh\_dependents()](#the-handling-of-zebra_rnh_refresh_dependents)
+  - [Nexthop Group Preserving](#nexthop-group-preserving)
+    - [Data Structure Modifications](#data-structure-modifications-1)
+    - [The Handling of nexthop\_active\_update()](#the-handling-of-nexthop_active_update)
+    - [The Handling of rib\_add\_multipath\_nhe()](#the-handling-of-rib_add_multipath_nhe)
   - [Route Withdrawal](#route-withdrawal)
     - [Data Structure Modifications](#data-structure-modifications-2)
     - [Fast Convergence Handling for Route Withdrawal](#fast-convergence-handling-for-route-withdrawal)
@@ -102,11 +102,11 @@ This list is updated when a new route is added or a nexthop is registered by the
 ### Recursive Route Handling
 The handling is carried out during the replay of route updates, and zebra_rib_evaluate_rn_nexthops() can be seen as the entry point for this process. It starts from the incoming route node and retrieves its NHT list. Then, it iterates through each nexthop(prefix) in the NHT list, utilizing the prefix to invoke zebra_evaluate_rnh(). This function works as follows:
 
-1. Identify the new route entry to resolve the nexthop
-2. Compare the new route entry with the previous one, if they are not same, update the nexthop resolving state as the new route entry, and then send a nexthop change notification to protocol clients
-3. Protocol clients recalculate the path associated with the nexthop, then resend the corresponding route to Zebra.
+1. identify the new route entry to resolve the nexthop
+2. compare the new route entry with the previous one, if they are not same, update the nexthop resolving state as the new route entry, and then send a nexthop change notification to protocol clients
+3. protocol clients recalculate the path associated with the nexthop, then resend the corresponding route to Zebra.
 4. Zebra processes this route and the route's nexthop is recursively resolved and also flattened
-6. At the end of route updating, zebra_rib_evaluate_rn_nexthops() is called with the route's NHT list, and then it returns to step 1. This loop procedure contributes to recursive route convergence
+6. at the end of route updating, zebra_rib_evaluate_rn_nexthops() is called with the route's NHT list, and then it returns to step 1. This loop procedure contributes to recursive route convergence
 
 ## High Level Design
 
@@ -120,60 +120,6 @@ Here are a list of trigger events which we want to take care for getting recursi
 | Case 3: IGP remote PE failure  | A remote PE node is unreachable in IGP domain. | IGP triggers IGP leaf delete event. Zebra will be triggered from zread_route_del(). It is the PIC edge handling case |
 | Case 4: BGP remote PE node failure  | BGP remote node down | It should be detected by IGP remote node down first before BGP reacts, a.k.a the same as the above steps. This is the PIC edge handling case.|
 | Case 5: Remote PE-CE link failure | This is remote PE's PIC local case.  | Remote PE will trigger PIC local handling for quick traffic fix up. Local PE will be updated after BGP gets informed. |
-
-### Nexthop Group Preserving
-Consider the case of recursive routes for EVPN underlay
-
-    B>  2.2.2.2/32 [200/0] via 100.0.0.1 (recursive), weight 1, 00:11:50
-      *                      via 10.1.0.16, Ethernet1, weight 1, 00:11:50
-      *                      via 10.1.0.17, Ethernet2, weight 1, 00:11:50
-      *                      via 10.1.0.18, Ethernet3, weight 1, 00:11:50
-                           via 200.0.0.1 (recursive), weight 1, 00:11:50
-      *                      via 10.1.0.26, Ethernet4, weight 1, 00:11:50
-      *                      via 10.1.0.27, Ethernet5, weight 1, 00:11:50
-      *                      via 10.1.0.28, Ethernet6, weight 1, 00:11:50
-    B>* 100.0.0.0/24 [200/0] via 10.1.0.16, Ethernet1, weight 1, 00:11:57
-      *                      via 10.1.0.17, Ethernet2, weight 1, 00:11:57
-      *                      via 10.1.0.18, Ethernet3, weight 1, 00:11:57
-    B>* 200.0.0.0/24 [200/0] via 10.1.0.26, Ethernet4, weight 1, 00:11:50
-      *                      via 10.1.0.27, Ethernet5, weight 1, 00:11:50
-      *                      via 10.1.0.28, Ethernet6, weight 1, 00:11:50
-
-If the path 10.1.0.28 of prefix 200.0.0.0/24 is removed, Zebra will explicitly update both routes for recursive convergence with the help of the BGP client, one for 200.0.0.0/24 and another for 2.2.2.2/32. By the original approach of routes updating, nexthop resolving will proceed along the reverse path of dependency, so all nexthops on that direction will be recreated. As shown in the diagram, all dependent nexthops originating from 10.1.0.28 will be recreated, as indicated by the red text in the diagram.
-
-<figure align=center>
-    <img src="images/nhg_change1.png" >
-    <figcaption>Figure 6. NHG dependents<figcaption>
-</figure>
-
-<figure align=center>
-    <img src="images/nhg_change2.png" >
-    <figcaption>Figure 7. NHG dependents (IGP node 10.0.1.28 is up)<figcaption>
-</figure>
-
-However, for the view of the reachability of NHG 68, 61, 62, there is no need to refresh them for recursive route again (68 for prefix 2.2.2.2 and 61, 62 for 200.0.0.1), since the reachability hasn't changed. If these NHGs remain unchanged, it means that the nhe for them can be reused and the dependents chain have no changes too.
-
-After introducing the "Nexthop Group Preserving" enhancement, the desired goal is as illustrated in the following diagram.
-
-<figure align=center>
-    <img src="images/nhg_change3.png" >
-    <figcaption>Figure 8. NHG dependents preserved (IGP node 10.0.1.28 is up)<figcaption>
-</figure>
-
-The dependent NHG chain all the way up for the newly added path NHG 64 is untouched.
-
-#### Data Structure Modifications
-``` c
-/* The nexthop group id should remain unchanged during resolving */
-#define ROUTE_ENTRY_NHG_ID_PRESERVED      0x80
-```
-This new flag for struct route_entry indicates that the nexthop group shouldn't change during route's recursive resolving, it also implies that the route with this flag only has some nexthop path change, but the reachability of it remains same.
-
-#### The Handling of nexthop_active_update()
-The modification made to nexthop_active_update() preserves the associated nexthop group of routes with the ROUTE_ENTRY_NHG_ID_PRESERVED flag set during recursive route resolution. It recursively resolves them in place. Once the resolution is complete, the nexthop group itself is reused, and no new nexthop groups are created.
-
-#### The Handling of rib_add_multipath_nhe()
-TODO: Route adding part for this function need to be tuned. In the case of that the new route entry replaces the old one, we need to reuse the original nhe and only updates its associated nhg to the new ones, then attach it to the new route entry and set ROUTE_ENTRY_NHG_ID_PRESERVED to this route entry. This may achieve the goal of preserving NHG?
 
 ### Optimization of Recursive Route Handling
 Consider the case of recursive routes for EVPN underlay
@@ -401,6 +347,43 @@ Explanation of the functions above:
 3. zebra_rnh_refresh_dependents() finds the corresponding nexthop group (nhe), then uses this nhe as parameter for zebra_rnh_eval_dependents()
 4. zebra_rnh_eval_dependents() walks back and find the routes depends on the nhe, then requeue the routes to working queue for rib_process() again. A new flag ROUTE_ENTRY_NHG_ID_PRESERVED (struct route_entry) is set for this route, to indicate that its recursive reachability is unchanged
 5. In each round of rib_process(), the rnh's resolving route status will be checked in zebra_rnh_eval_nexthop_entry(). The backwalk for route convergence stops if the rnh is resolved on a route with ROUTE_ENTRY_NHG_ID_PRESERVED flag or the rnh list is empty.
+
+### Nexthop Group Preserving
+By the original approach of routes updating, once the IGP routing changes, NHG refresh will proceed along the reverse path of dependency, so all NHGs on that direction will be recreated. As shown in the diagram, when the IGP node 10.0.1.28 is up, all dependent NHGs originating from it will be recreated, as indicated by the red text in the diagram.
+
+<figure align=center>
+    <img src="images/nhg_change1.png" >
+    <figcaption>Figure 6. NHG dependents<figcaption>
+</figure>
+
+<figure align=center>
+    <img src="images/nhg_change2.png" >
+    <figcaption>Figure 7. NHG dependents (IGP node 10.0.1.28 is up)<figcaption>
+</figure>
+
+However, for the view of the reachability of NHG 68, 61, 62, there is no need to refresh them for recursive route again (68 for prefix 2.2.2.2 and 61, 62 for 200.0.0.1), since the reachability hasn't changed. If these NHGs remain unchanged, it means that the nhe for them can be reused and the dependents chain have no changes too.
+
+After introducing the "Nexthop Group Preserving" enhancement, the desired goal is as illustrated in the following diagram.
+
+<figure align=center>
+    <img src="images/nhg_change3.png" >
+    <figcaption>Figure 8. NHG dependents preserved (IGP node 10.0.1.28 is up)<figcaption>
+</figure>
+
+The dependent NHG chain all the way up for the newly added path NHG 64 is untouched.
+
+#### Data Structure Modifications
+``` c
+/* The nexthop group id should remain unchanged during resolving */
+#define ROUTE_ENTRY_NHG_ID_PRESERVED      0x80
+```
+This new flag for struct route_entry indicates that the nexthop group shouldn't change during route's recursive resolving, it also implies that the route with this flag only has some nexthop path change, but the reachability of it remains same.
+
+#### The Handling of nexthop_active_update()
+The modification made to nexthop_active_update() preserves the associated nexthop group of routes with the ROUTE_ENTRY_NHG_ID_PRESERVED flag set during recursive route resolution. It recursively resolves them in place. Once the resolution is complete, the nexthop group itself is reused, and no new nexthop groups are created.
+
+#### The Handling of rib_add_multipath_nhe()
+TODO: Route adding part for this function need to be tuned. In the case of that the new route entry replaces the old one, we need to reuse the original nhe and only updates its associated nhg to the new ones, then attach it to the new route entry and set ROUTE_ENTRY_NHG_ID_PRESERVED to this route entry. This may achieve the goal of preserving NHG?
 
 ### Route Withdrawal
 As shown in the example of recursive routes for EVPN underlay above, rib deletion is triggered by the local interface going down or by an explicit route withdrawal message from the BGP client. It is handled in rib_gc_dest(), while zebra_rnh_refresh_dependents() is called for all the rnh that depend on the removed route. So route withdrawal shares the same logic of route updating.
