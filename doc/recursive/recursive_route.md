@@ -139,16 +139,19 @@ Consider the case of recursive routes for EVPN underlay
       *                      via 10.1.0.27, Ethernet5, weight 1, 00:11:50
       *                      via 10.1.0.28, Ethernet6, weight 1, 00:11:50
 
-As described in the above section, if the path 10.1.0.67 for prefix 100.0.0.0/24 is new added, Zebra will explicitly update both routes for recursive convergence with the help of the BGP client, one for the prefix 100.0.0.0/24 and another for the prefix 2.2.2.2/32.
+If the path 10.1.0.28 for prefix 100.0.0.0/24 is removed, Zebra will explicitly update both routes for recursive convergence with the help of the BGP client, one for 200.0.0.0/24 and another for 2.2.2.2/32. In this scenario, although the route 200.0.0.0/24 has one path removed, but its reachability for route 2.2.2.2/32 remains unchanged . Zebra has the dependency relationships between these recursive nexthop groups, so there is a chance to improve Zebra for route convergence by itself.
 
-In this scenario, although the route for prefix 100.0.0.0/24 has a new added path, but the reachability of the prefix 2.2.2.2 remains unchanged and also Zebra has the dependency relationships between recursive nexthop groups, so there is a chance to improve Zebra for route convergence by itself.
+<figure align=center>
+    <img src="images/path_remove1.png" >
+    <figcaption>Figure 2. path remove for recursive route<figcaption>
+</figure>
 
 #### Data Structure Modifications
 In order to enable Zebra to update routes without notifying protocol clients, it should be able to obtain the route node associated with the nexthop group that has undergone changes. Some back pointer fields need to be added.
 
 <figure align=center>
     <img src="images/data_struct.png" >
-    <figcaption>Figure 2. data structure modification for routes update<figcaption>
+    <figcaption>Figure 3. data structure modification for routes update<figcaption>
 </figure>
 
 ##### struct nhg_hash_entry 
@@ -286,7 +289,7 @@ Provide a brief description of Zebra's original recursive convergence process.
 
 <figure align=center>
     <img src="images/route_converge_original.png" >
-    <figcaption>Figure 3. route convergence process<figcaption>
+    <figcaption>Figure 4. route convergence process<figcaption>
 </figure>
 
 Route/Nexthop dependents are built or refreshed from the bottom up with each invocation of zebra_rnh_eval_nexthop_entry().
@@ -295,7 +298,7 @@ After the insertion of zebra_rnh_refresh_dependents() into the original recursiv
 
 <figure align=center>
     <img src="images/zebra_rnh_refresh_dependents.png" >
-    <figcaption>Figure 4. zebra_rnh_refresh_dependents()<figcaption>
+    <figcaption>Figure 5. zebra_rnh_refresh_dependents()<figcaption>
 </figure>
 
 The logic in the red portion of the code will achieve fast route convergence updating. But it won't completely disable the protocol client's notification mechanism because when the reachability of routes that the NHT list depends on changes, i.e., when the routes it depends on change completely to another one, Zebra will still use the original protocol client notify mechanism for route convergence. In other words, the blue portion will only take effect when there's an increase or decrease in the paths corresponding to the nexthop group that doesn't affect route reachability.
@@ -350,12 +353,12 @@ By the original approach of routes updating, once the IGP routing changes, NHG r
 
 <figure align=center>
     <img src="images/nhg_change1.png" >
-    <figcaption>Figure 5. NHG dependents<figcaption>
+    <figcaption>Figure 6. NHG dependents<figcaption>
 </figure>
 
 <figure align=center>
     <img src="images/nhg_change2.png" >
-    <figcaption>Figure 6. NHG dependents (IGP node 10.0.1.28 is up)<figcaption>
+    <figcaption>Figure 7. NHG dependents (IGP node 10.0.1.28 is up)<figcaption>
 </figure>
 
 However, for the view of the reachability of NHG 68, 61, 62, there is no need to refresh them for recursive route again (68 for prefix 2.2.2.2 and 61, 62 for 200.0.0.1), since the reachability hasn't changed. If these NHGs remain unchanged, it means that the nhe for them can be reused and the dependents chain have no changes too.
@@ -364,7 +367,7 @@ After introducing the "Nexthop Group Preserving" enhancement, the desired goal i
 
 <figure align=center>
     <img src="images/nhg_change3.png" >
-    <figcaption>Figure 7. NHG dependents preserved (IGP node 10.0.1.28 is up)<figcaption>
+    <figcaption>Figure 8. NHG dependents preserved (IGP node 10.0.1.28 is up)<figcaption>
 </figure>
 
 The dependent NHG chain all the way up for the newly added path NHG 64 is untouched.
@@ -387,14 +390,14 @@ As shown in the example of recursive routes for EVPN underlay above, rib deletio
 
 <figure align=center>
     <img src="images/route_delete.png" >
-    <figcaption>Figure 8. rib deletion code path<figcaption>
+    <figcaption>Figure 9. rib deletion code path<figcaption>
 </figure>
 
 Assuming interface Ethernet6 is down, in the context of "Nexthop Group Preserving", the nexthop group dependent state is as illustrated in the following diagram
 
 <figure align=center>
     <img src="images/nhg_change4.png" >
-    <figcaption>Figure 9. NHG dependents preserved (Ethernet6 is down)<figcaption>
+    <figcaption>Figure 10. NHG dependents preserved (Ethernet6 is down)<figcaption>
 </figure>
 
 The dependent NHG chain all the way up from NHG 62 is untouched.
@@ -422,34 +425,34 @@ We rely on BRCM and NTT's changes.
 ### Test Case 1: local link failure
 <figure align=center>
     <img src="images/testcase1.png" >
-    <figcaption>Figure 10.local link failure <figcaption>
+    <figcaption>Figure 11.local link failure <figcaption>
 </figure>
 
 ### Test Case 2: IGP remote link/node failure
 <figure align=center>
     <img src="images/testcase2.png" >
-    <figcaption>Figure 11. IGP remote link/node failure
+    <figcaption>Figure 12. IGP remote link/node failure
  <figcaption>
 </figure>
 
 ### Test Case 3: IGP remote PE failure
 <figure align=center>
     <img src="images/testcase3.png" >
-    <figcaption>Figure 12. IGP remote PE failure
+    <figcaption>Figure 13. IGP remote PE failure
  <figcaption>
 </figure>
 
 ### Test Case 4: BGP remote PE node failure
 <figure align=center>
     <img src="images/testcase4.png" >
-    <figcaption>Figure 13. BGP remote PE node failure
+    <figcaption>Figure 14. BGP remote PE node failure
  <figcaption>
 </figure>
 
 ### Test Case 5: Remote PE-CE link failure
 <figure align=center>
     <img src="images/testcase5.png" >
-    <figcaption>Figure 14. Remote PE-CE link failure
+    <figcaption>Figure 15. Remote PE-CE link failure
  <figcaption>
 </figure>
 
