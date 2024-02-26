@@ -147,7 +147,7 @@ If the path 10.1.0.28 of prefix 200.0.0.0/24 is removed, Zebra will explicitly u
 </figure>
 
 #### Data Structure Modifications
-In order to enable Zebra to update routes without notifying protocol clients, it should be able to obtain the route node associated with the nexthop group that has undergone changes. Some back pointer fields need to be added.
+In order to enable Zebra to update routes without notifying protocol clients, it should be able to obtain the route node associated with the nexthop that has undergone changes. Some back pointer fields need to be added.
 
 <figure align=center>
     <img src="images/data_struct.png" >
@@ -238,7 +238,7 @@ done:
 ```
 
 ##### struct rnh
-zebra_rib_evaluate_rn_nexthops() triggers routes updating through nexthop group backwalk. Without the assistance of protocol clients, a method needs to be introduced for looking up nexthop group based on the prefix of the NHT list. e.g. Finding the nexthop group based on the prefix 100.0.0.1.
+zebra_rib_evaluate_rn_nexthops() triggers routes updating through nexthop backwalk. Without the assistance of protocol clients, a method needs to be introduced for looking up nexthop hash struct(nhe) based on the prefix of the NHT list. e.g. Finding the nhe based on the prefix 100.0.0.1.
 
 A new field nhe_id is added for this purpose.
 
@@ -251,9 +251,9 @@ A new field nhe_id is added for this purpose.
         ...
     }
 
-This field provides information about which nexthop group is associated with the NHT prefix.
+This field provides information about which nhe is associated with the NHT prefix.
 
-nhg_id_rnh_add() is used to set this field and it is invoked each time a new nexthop group is created in zebra_nhe_find().
+nhg_id_rnh_add() is used to set this field and it is invoked each time a new singleton nhe is created in zebra_nhe_find().
 ``` c
 static void nhg_id_rnh_add(struct nhg_hash_entry *nhe)
 ```
