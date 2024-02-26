@@ -375,29 +375,6 @@ This flag for struct route_entry indicates that the nexthop group shouldn't chan
 #### The Handling of nexthop_active_update()
 The modification made to nexthop_active_update() preserves the associated nexthop group of routes with the ROUTE_ENTRY_NHG_ID_PRESERVED flag set during recursive route resolution. It recursively resolves them in place. Once the resolution is complete, the nexthop group resolution is refreshed, and no new nexthop groups are created.
 
-### Route Withdrawal
-As shown in the example of recursive routes for EVPN underlay above, rib deletion is triggered by the local interface going down or by an explicit route withdrawal message from the BGP client. It is handled in rib_gc_dest(), while zebra_rnh_refresh_dependents() is called for all the rnh that depend on the removed route. So route withdrawal shares the same logic of route updating.
-
-<figure align=center>
-    <img src="images/route_delete.png" >
-    <figcaption>Figure 9. rib deletion code path<figcaption>
-</figure>
-
-Assuming interface Ethernet6 is down, in the context of "Nexthop Group Preserving", the nexthop group dependent state is as illustrated in the following diagram
-
-<figure align=center>
-    <img src="images/nhg_change4.png" >
-    <figcaption>Figure 10. NHG dependents preserved (Ethernet6 is down)<figcaption>
-</figure>
-
-The dependent NHG chain all the way up from NHG 62 is untouched.
-
-#### Data Structure Modifications
-As described in the "route updating" section.
-
-#### Fast Convergence Handling for Route Withdrawal
-As described in the "route updating" section.
-
 ### Special Considerations for EVPN Overlay Routes
 TODO:
 
