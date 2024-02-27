@@ -332,11 +332,12 @@ static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
 
 Explanation of the functions above:
 
-1. rib_process() eventually calls zebra_rnh_eval_nexthop_entry() after finishing the route updating task
-2. zebra_rnh_eval_nexthop_entry() see if a tracked nexthop has resolution changed, if it is true, zebra_rnh_refresh_dependents() is invoked, otherwise, the original protocol client notify mechanism is used, as step 6, zebra_rnh_notify_protocol_clients()
+1. rib_process() eventually calls zebra_rnh_eval_nexthop_entry() after finishing one route updating task
+2. zebra_rnh_eval_nexthop_entry() see if a tracked nexthop has resolution changed, if it is true, the NHG of new resolving route is checked against the previous one, if they are not equal, zebra_rnh_refresh_dependents() is invoked, otherwise, the original protocol client notify mechanism is used
 3. zebra_rnh_refresh_dependents() finds the corresponding nexthop group (nhe), then uses this nhe as parameter for zebra_rnh_eval_dependents()
 4. zebra_rnh_eval_dependents() walks back and find the routes depends on the nhe, then requeue the routes to working queue for rib_process() again. A new added flag ROUTE_ENTRY_NHG_ID_PRESERVED is set for this route, to indicate that its recursive reachability is unchanged
-5. In each round of rib_process(), the rnh's resolving route status will be checked in zebra_rnh_eval_nexthop_entry(). The backwalk for recursive route convergence stops if the rnh is resolved on a route with same nhe id as the previous resolving route or the rnh list is empty.
+5. The dataplane performs a fast NHG refresh if the route is flagged with ROUTE_ENTRY_NHG_ID_PRESERVED
+6. In each round of rib_process(), the rnh's resolving route status will be checked in zebra_rnh_eval_nexthop_entry(). The backwalk for recursive route convergence stops if the rnh is resolved on a route with same nhe id as the previous resolving route or the rnh list is empty.
 
 ### Nexthop Group Preserving
 As previous section, once a route has some path changes, recursive route updating will proceed along the reverse path of dependency. By the original approach of the routes updating, all nexthop on that direction will be recreated. As shown in the diagram, when the path 10.0.1.28 is removed, all dependent nexthops originating from it will be recreated, as indicated by the red text in the diagram.
