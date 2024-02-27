@@ -353,7 +353,7 @@ However, for the view of the reachability of nexthop 73 (for route 2.2.2.2/32), 
     <figcaption>Figure 7. NHG dependents preserved<figcaption>
 </figure>
 
-The NHG ID remains unchanged, facilitating a fast refresh by the dataplane.
+The nexthop ID remains unchanged, facilitating a fast refresh by the dataplane.
 
 #### Data Structure Modifications
 ``` c
