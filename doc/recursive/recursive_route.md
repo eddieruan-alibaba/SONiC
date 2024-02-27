@@ -288,8 +288,8 @@ This new added function is inserted into the existing route convergence process,
 </figure>
 
 The logic in the blue portion of the code serves fast route convergence updating. It won't completely replace the protocol client's notification for route updating in the following scenarios:
-- The reachability of routes that the NHT list depends on changes, i.e., when the routes it depends on change completely to another one.
-- The routes that depends on a recursive one still get updates by client's notification.
+- The reachability of routes that the NHT list depends on changes, i.e., when the routes it depends on change completely to another one
+- The routes that depends on a recursive one still get updates by client's notification
 
 zebra_rnh_refresh_dependents() is called as follows:
 
