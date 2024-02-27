@@ -321,6 +321,8 @@ static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
     } else if (compare_state(re, rnh->state)) {
         if (re->nhe->id != rnh->state->nhe->id)
             zebra_rnh_refresh_dependents(rnh);
+        else
+            state_changed = 1;
         copy_state(rnh, re, nrn);
     }
     zebra_rnh_store_in_routing_table(rnh);
