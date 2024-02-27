@@ -282,14 +282,12 @@ done:
 
 This new added function is inserted into the existing route convergence process, allowing Zebra to achieve route convergence in the case where the reachability of recursive routes remains unchanged.
 
-After the insertion of zebra_rnh_refresh_dependents() into the original recursive convergence process.
-
 <figure align=center>
     <img src="images/zebra_rnh_refresh_dependents.png" >
     <figcaption>Figure 5. zebra_rnh_refresh_dependents()<figcaption>
 </figure>
 
-The logic in the red portion of the code will achieve fast route convergence updating. But it won't completely disable the protocol client's notification mechanism because when the reachability of routes that the NHT list depends on changes, i.e., when the routes it depends on change completely to another one, Zebra will still use the original protocol client notify mechanism for route convergence. In other words, the blue portion will only take effect when there's an increase or decrease in the paths corresponding to the nexthop group that doesn't affect route reachability.
+The logic in the blue portion of the code will achieve fast route convergence updating. But it won't completely disable the protocol client's notification mechanism because when the reachability of routes that the NHT list depends on changes, i.e., when the routes it depends on change completely to another one, Zebra will still use the original protocol client notify mechanism for route convergence. In other words, the blue portion will only take effect when there's an increase or decrease in the paths corresponding to the nexthop group that doesn't affect route reachability.
 
 zebra_rnh_refresh_dependents() is called as follows:
 
