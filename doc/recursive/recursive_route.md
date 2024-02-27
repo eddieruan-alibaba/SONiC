@@ -144,7 +144,7 @@ If the path 10.1.0.28 of prefix 200.0.0.0/24 is removed, Zebra will explicitly u
 </figure>
 
 #### Data Structure Modifications
-In order to enable Zebra to update routes without notifying protocol clients, it should be able to obtain the route node associated with the nexthop that has undergone changes. Some back pointer fields need to be added.
+In order to enable Zebra to replay recursive routes without notifying protocol clients, it should be able to obtain the route node associated with the nexthop that has undergone changes. Some back pointer fields need to be added.
 
 <figure align=center>
     <img src="images/data_struct.png" >
