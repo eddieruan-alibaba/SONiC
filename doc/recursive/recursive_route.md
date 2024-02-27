@@ -43,7 +43,7 @@
 This document is for reducing packet loss when Zebra handles convergence for millions of recursive routes on SONiC. Since SONiC doesn't have MPLS VPN support in master, the testing would focus on EVPN and SRv6 VPN only. 
 
 ## Requirements Overview
-This HLD introducing a method for fast recovering from packet loss in the event of underlay ECMP path changes. Since Zebra serves is the control plane on SONiC, then corresponding adjustments may be made to FPM and Orchagent to collaborate with it.
+This HLD introducing a method for fast recovering from packet loss in the event of underlay ECMP path changes. Since Zebra serves as the control plane on SONiC, then corresponding adjustments may be made to FPM and Orchagent to collaborate with it.
 - Fpm needs to add a new schema to take each member as nexthop group ID and update APP DB. (Rely on BRCM and NTT's changes)
 - Orchagent picks up event from APP DB and trigger nexthop group programming. Neighorch needs to handle this new schema without change too much on existing codes. (Rely on BRCM and NTT's changes)
 
