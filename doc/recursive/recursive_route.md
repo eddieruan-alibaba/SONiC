@@ -346,14 +346,14 @@ As previous section, once a route has some path changes, recursive route updatin
     <figcaption>Figure 6. nexthop dependents change<figcaption>
 </figure>
 
-However, for the view of the reachability of nexthop 88, 89, there is no need to recreate them for recursive route updating again, since the reachability hasn't changed. After introducing the "Nexthop Group Preserving" enhancement, the desired goal is as illustrated in the following diagram.
+However, for the view of the reachability of nexthop 73 (for route 2.2.2.2/32), there is no need to recreate it for recursive route updating again, since the reachability hasn't changed. After introducing the "Nexthop Group Preserving" enhancement, the desired goal is as illustrated in the following diagram.
 
 <figure align=center>
     <img src="images/nhg_change2.png" >
     <figcaption>Figure 7. NHG dependents preserved<figcaption>
 </figure>
 
-The dependent nexthops chain all the way up for the newly updated nexthop group 90 is untouched.
+The NHG ID remains unchanged, facilitating a fast refresh by the dataplane.
 
 #### Data Structure Modifications
 ``` c
