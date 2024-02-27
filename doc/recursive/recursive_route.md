@@ -90,7 +90,7 @@ Each route node (struct rib_dest_t) contains an nht field, which stores all next
 This list is updated when a new route is added or a nexthop is registered by the protocol clients.
 
 ### Recursive Route Handling
-A brief description of Zebra's current recursive convergence process.
+A brief description of Zebra's current recursive convergence process below
 
 <figure align=center>
     <img src="images/route_converge_original.png" >
