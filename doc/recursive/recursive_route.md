@@ -17,7 +17,7 @@
   - [Recursive Route Handling](#recursive-route-handling)
 - [High Level Design](#high-level-design)
   - [Triggers Events for Recursive Handling](#triggers-events-for-recursive-handling)
-  - [Fast Dataplane Update for Recursive Route](#fast-dataplane-update-for-recursive-route)
+  - [Fast Convergence for Recursive Routes](#fast-convergence-for-recursive-routes)
     - [Data Structure Modifications](#data-structure-modifications)
       - [struct nhg\_hash\_entry](#struct-nhg_hash_entry)
       - [struct route\_entry](#struct-route_entry)
@@ -43,7 +43,7 @@
 This document is for reducing packet loss when Zebra handles convergence for millions of recursive routes on SONiC. Since SONiC doesn't have MPLS VPN support in master, the testing would focus on EVPN and SRv6 VPN only. 
 
 ## Requirements Overview
-This HLD introducing a method for fast recovering from packet loss in the event of underlay ECMP path changes. Since Zebra serves as the control plane, then corresponding adjustments may be made to FPM and Orchagent to collaborate with it.
+This HLD introducing a method for fast recovering from packet loss in the event of underlay ECMP path changes. Since Zebra serves is the control plane on SONiC, then corresponding adjustments may be made to FPM and Orchagent to collaborate with it.
 - Fpm needs to add a new schema to take each member as nexthop group ID and update APP DB. (Rely on BRCM and NTT's changes)
 - Orchagent picks up event from APP DB and trigger nexthop group programming. Neighorch needs to handle this new schema without change too much on existing codes. (Rely on BRCM and NTT's changes)
 
@@ -52,8 +52,9 @@ Because the Linux kernel lacks support for recursive routes, FRR Zebra flattens 
 <figure align=center>
     <img src="images/srv6_igp2bgp.png" >
     <figcaption>Figure 1. Alibaba issue Underlay routes flap affecting Overlay SRv6 routes <figcaption>
-</figure> 
-Zebra serves as the control plane, and in order to solve the above routes flap issue, some enhancements are required.
+</figure>
+
+In order to solve the above routes flap issue, some enhancements of Zebra are required.
 
 ## Zebra Current Approach for Recursive Routes
 ### Data Structure for Recursive Handling
@@ -110,7 +111,7 @@ Here are a list of trigger events which we want to take care for getting recursi
 | Case 4: BGP remote PE node failure  | BGP remote node down | It should be detected by IGP remote node down first before BGP reacts, a.k.a the same as the above steps. This is the PIC edge handling case.|
 | Case 5: Remote PE-CE link failure | This is remote PE's PIC local case.  | Remote PE will trigger PIC local handling for quick traffic fix up. Local PE will be updated after BGP gets informed. |
 
-### Fast Dataplane Update for Recursive Route
+### Fast Convergence for Recursive Routes
 Consider the case of recursive routes for EVPN underlay
 
     B>  2.2.2.2/32 [200/0] via 100.0.0.1 (recursive), weight 1, 00:11:50
