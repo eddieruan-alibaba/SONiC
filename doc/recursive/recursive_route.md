@@ -54,7 +54,7 @@ Because the Linux kernel lacks support for recursive routes, FRR Zebra flattens 
     <figcaption>Figure 1. Alibaba issue Underlay routes flap affecting Overlay SRv6 routes <figcaption>
 </figure>
 
-In order to solve the above routes flap issue, some enhancements of Zebra are required.
+In order to solve the above routes flap issue, some enhancements of Zebra are necessary.
 
 ## Zebra Current Approach for Recursive Routes
 ### Data Structure for Recursive Handling
