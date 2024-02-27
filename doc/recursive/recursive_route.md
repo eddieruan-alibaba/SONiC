@@ -90,7 +90,14 @@ Each route node (struct rib_dest_t) contains an nht field, which stores all next
 This list is updated when a new route is added or a nexthop is registered by the protocol clients.
 
 ### Recursive Route Handling
-The handling is carried out during the replay of route updates, and zebra_rib_evaluate_rn_nexthops() can be seen as the entry point for this process. It starts from the incoming route node and retrieves its NHT list. Then, it iterates through each nexthop(prefix) in the NHT list, utilizing the prefix to invoke zebra_evaluate_rnh(). This function works as follows:
+A brief description of Zebra's current recursive convergence process.
+
+<figure align=center>
+    <img src="images/route_converge_original.png" >
+    <figcaption>Figure 2. route convergence process<figcaption>
+</figure>
+
+Nexthop dependents are built or refreshed from the bottom up with each invocation of zebra_rnh_eval_nexthop_entry(). Recursive route handling is carried out during the replay of route updates, and zebra_rib_evaluate_rn_nexthops() can be seen as the entry point for this process. It starts from the incoming route node and retrieves its NHT list. Then, it iterates through each nexthop(prefix) in the NHT list, utilizing the prefix to invoke zebra_evaluate_rnh(). This function works as follows:
 
 1. identify the new route entry to resolve the nexthop
 2. compare the new route entry with the previous one, if they are not same, update the nexthop resolving state as the new route entry, and then send a nexthop change notification to protocol clients
@@ -133,7 +140,7 @@ If the path 10.1.0.28 of prefix 200.0.0.0/24 is removed, Zebra will explicitly u
 
 <figure align=center>
     <img src="images/path_remove1.png" >
-    <figcaption>Figure 2. path remove for recursive route<figcaption>
+    <figcaption>Figure 3. path remove for recursive route<figcaption>
 </figure>
 
 #### Data Structure Modifications
@@ -141,7 +148,7 @@ In order to enable Zebra to update routes without notifying protocol clients, it
 
 <figure align=center>
     <img src="images/data_struct.png" >
-    <figcaption>Figure 3. data structure modification for routes update<figcaption>
+    <figcaption>Figure 4. data structure modification for routes update<figcaption>
 </figure>
 
 ##### struct nhg_hash_entry 
@@ -275,15 +282,6 @@ done:
 
 This new added function is inserted into the existing route convergence process, allowing Zebra to achieve route convergence in the case where the reachability of recursive routes remains unchanged.
 
-Provide a brief description of Zebra's original recursive convergence process.
-
-<figure align=center>
-    <img src="images/route_converge_original.png" >
-    <figcaption>Figure 4. route convergence process<figcaption>
-</figure>
-
-Route/Nexthop dependents are built or refreshed from the bottom up with each invocation of zebra_rnh_eval_nexthop_entry().
-
 After the insertion of zebra_rnh_refresh_dependents() into the original recursive convergence process.
 
 <figure align=center>
@@ -382,34 +380,34 @@ We rely on BRCM and NTT's changes.
 ### Test Case 1: local link failure
 <figure align=center>
     <img src="images/testcase1.png" >
-    <figcaption>Figure 11.local link failure <figcaption>
+    <figcaption>Figure 8.local link failure <figcaption>
 </figure>
 
 ### Test Case 2: IGP remote link/node failure
 <figure align=center>
     <img src="images/testcase2.png" >
-    <figcaption>Figure 12. IGP remote link/node failure
+    <figcaption>Figure 9. IGP remote link/node failure
  <figcaption>
 </figure>
 
 ### Test Case 3: IGP remote PE failure
 <figure align=center>
     <img src="images/testcase3.png" >
-    <figcaption>Figure 13. IGP remote PE failure
+    <figcaption>Figure 10. IGP remote PE failure
  <figcaption>
 </figure>
 
 ### Test Case 4: BGP remote PE node failure
 <figure align=center>
     <img src="images/testcase4.png" >
-    <figcaption>Figure 14. BGP remote PE node failure
+    <figcaption>Figure 11. BGP remote PE node failure
  <figcaption>
 </figure>
 
 ### Test Case 5: Remote PE-CE link failure
 <figure align=center>
     <img src="images/testcase5.png" >
-    <figcaption>Figure 15. Remote PE-CE link failure
+    <figcaption>Figure 12. Remote PE-CE link failure
  <figcaption>
 </figure>
 
