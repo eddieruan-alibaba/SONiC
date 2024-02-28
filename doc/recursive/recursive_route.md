@@ -273,7 +273,7 @@ The modification made to nexthop_active_update() preserves the associated nextho
 TODO:
 
 ### Dataplane Refresh for Recursive route
-As the recursive nexthop ID remains unchanged, Zebra is able to skip reinstall the routes again and only update the NHG to dataplane for fast dataplane refresh.
+Zebra only update the nexthop to dataplane for fast dataplane refresh.
 
 ### FPM's new schema for recursive nexthop group
 We rely on BRCM and NTT's changes.
