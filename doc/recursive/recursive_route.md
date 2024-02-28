@@ -21,7 +21,7 @@
     - [Data Structure Modifications](#data-structure-modifications)
       - [struct rnh](#struct-rnh)
     - [zebra\_rnh\_refresh\_dependents()](#zebra_rnh_refresh_dependents)
-  - [Nexthop Group Preserving](#nexthop-group-preserving)
+    - [Nexthop Dependency Update](#nexthop-dependency-update)
     - [Data Structure Modifications](#data-structure-modifications-1)
     - [The Handling of nexthop\_active\_update()](#the-handling-of-nexthop_active_update)
   - [Special Considerations for EVPN Overlay Routes](#special-considerations-for-evpn-overlay-routes)
@@ -241,7 +241,7 @@ Explanation of the functions above:
 3. zebra_rnh_refresh_dependents() finds the corresponding nexthop group (nhe), then uses this nhe as parameter for zebra_rnh_eval_dependents()
 4. zebra_rnh_eval_dependents() traverses backward to locate the parent nhe that depends on the current nhe. It then updates the parent nhe's dependency tree with the new one and proceeds to perform a nexthop refresh for the parent nhe to dataplane.
 
-#### Nexthop Group Preserving
+#### Nexthop Dependency Update
 As previous section, once a route has some path changes, recursive route updating will proceed along the reverse path of dependency. By the original approach of the routes updating, all nexthop on that direction will be recreated. As shown in the diagram, when the path 10.0.1.28 is removed, all dependent nexthops originating from it will be recreated, as indicated by the red text in the diagram.
 
 <figure align=center>
