@@ -17,7 +17,7 @@
   - [Recursive Route Handling](#recursive-route-handling)
 - [High Level Design](#high-level-design)
   - [Triggers Events for Recursive Handling](#triggers-events-for-recursive-handling)
-  - [Fast Convergence for Recursive Routes](#fast-convergence-for-recursive-routes)
+  - [Fast Refresh Nexthop for Dataplane](#fast-refresh-nexthop-for-dataplane)
     - [Data Structure Modifications](#data-structure-modifications)
       - [struct rnh](#struct-rnh)
     - [The Handling of zebra\_rnh\_refresh\_dependents()](#the-handling-of-zebra_rnh_refresh_dependents)
