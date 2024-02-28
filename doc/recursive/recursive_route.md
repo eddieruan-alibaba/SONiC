@@ -19,8 +19,6 @@
   - [Triggers Events for Recursive Handling](#triggers-events-for-recursive-handling)
   - [Fast Convergence for Recursive Routes](#fast-convergence-for-recursive-routes)
     - [Data Structure Modifications](#data-structure-modifications)
-      - [struct nhg\_hash\_entry](#struct-nhg_hash_entry)
-      - [struct route\_entry](#struct-route_entry)
       - [struct rnh](#struct-rnh)
     - [The Handling of zebra\_rnh\_refresh\_dependents()](#the-handling-of-zebra_rnh_refresh_dependents)
   - [Nexthop Group Preserving](#nexthop-group-preserving)
