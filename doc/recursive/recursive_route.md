@@ -12,7 +12,7 @@
 - [Requirements Overview](#requirements-overview)
 - [Zebra Current Approach for Recursive Routes](#zebra-current-approach-for-recursive-routes)
   - [Data Structure for Recursive Handling](#data-structure-for-recursive-handling)
-    - [NH Dependency Tree](#nh-dependency-tree)
+    - [Nexthop Dependency Tree](#nexthop-dependency-tree)
     - [NHT List from Route Node](#nht-list-from-route-node)
   - [Recursive Route Handling](#recursive-route-handling)
 - [High Level Design](#high-level-design)
@@ -56,7 +56,7 @@ To solve this issue, we need to introduce Prefix Independent Convergence (PIC) t
 
 ## Zebra Current Approach for Recursive Routes
 ### Data Structure for Recursive Handling
-#### NH Dependency Tree
+#### Nexthop Dependency Tree
 struct nexthop contains two fields, *resolved and *reparent for tracking nexthop resolution's dependencies. 
 
 	/* Nexthops obtained by recursive resolution.
