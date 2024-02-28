@@ -116,7 +116,7 @@ Here are a list of trigger events which we want to take care for getting recursi
 | Case 4: BGP remote PE node failure  | BGP remote node down | It should be detected by IGP remote node down first before BGP reacts, a.k.a the same as the above steps. This is the PIC edge handling case.|
 | Case 5: Remote PE-CE link failure | This is remote PE's PIC local case.  | Remote PE will trigger PIC local handling for quick traffic fix up. Local PE will be updated after BGP gets informed. |
 
-### Fast Refresh Nexthop for Dataplane
+### Nexthop Refresh Handling
 Consider the case of recursive routes for EVPN underlay
 
     B>  2.2.2.2/32 [200/0] via 100.0.0.1 (recursive), weight 1, 00:11:50
@@ -186,7 +186,7 @@ done:
 }
 ```
 
-#### The Handling of zebra_rnh_refresh_dependents()
+#### zebra_rnh_refresh_dependents()
 
 This newly added function is inserted into the existing route convergence process, enabling Zebra to swiftly refresh nexthops in the dataplane before notifying the protocol client of route updates.
 
