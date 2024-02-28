@@ -195,9 +195,7 @@ This newly added function is inserted into the existing route convergence proces
     <figcaption>Figure 5. zebra_rnh_refresh_dependents()<figcaption>
 </figure>
 
-The logic in the blue portion of the code serves fast route convergence updating. It won't completely replace the protocol client's notification for route updating in the following scenarios:
-- The reachability of routes that the NHT list depends on changes, i.e., when the routes it depends on change completely to another one
-- The routes that depends on a recursive route still using the original client's notification procedure
+The function in the blue serves fast nexthop refreshing. It runs before the protocol client's notification for route updating.
 
 zebra_rnh_refresh_dependents() is called as follows:
 
@@ -227,11 +225,9 @@ static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
         copy_state(rnh, re, nrn);
         state_changed = 1;
     } else if (compare_state(re, rnh->state)) {
-        if (re->nhe->id != rnh->state->nhe->id)
-            zebra_rnh_refresh_dependents(rnh);
-        else
-            state_changed = 1;
+        zebra_rnh_refresh_dependents(rnh);        
         copy_state(rnh, re, nrn);
+        state_changed = 1;
     }
     zebra_rnh_store_in_routing_table(rnh);
     ...
