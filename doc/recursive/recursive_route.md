@@ -101,7 +101,7 @@ Recursive route handling is carried out during the replay of route updates, and 
 
 1. identify the new route entry to resolve the nexthop
 2. compare the new route entry with the previous one, if they are not same, update the nexthop resolving state as the new route entry, and then send a nexthop change notification to protocol clients
-3. protocol clients recalculate the path associated with the nexthop, then resend the corresponding route to Zebra.
+3. protocol clients recalculate the path associated with the nexthop, then resend the corresponding route update to Zebra.
 4. Zebra processes this route and the route's nexthop is recursively resolved and also flattened
 6. at the end of route updating, zebra_rib_evaluate_rn_nexthops() is called with the route's NHT list, and then it returns to step 1. This loop procedure contributes to recursive route convergence
 
