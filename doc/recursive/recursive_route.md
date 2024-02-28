@@ -139,7 +139,7 @@ Consider the case of recursive routes for EVPN underlay
 If the path 10.1.0.28 of prefix 200.0.0.0/24 is removed, Zebra will explicitly update both routes for recursive convergence with the help of the BGP client, one for 200.0.0.0/24 and another for 2.2.2.2/32. In this scenario, although the route 200.0.0.0/24 has one path removed, but its reachability for route 2.2.2.2/32 remains unchanged, and also Zebra has the dependency relationships between these routes' nexthops.
 
 <figure align=center>
-    <img src="images/path_remove1.png" >
+    <img src="images/path_remove.png" >
     <figcaption>Figure 3. path remove for recursive route<figcaption>
 </figure>
 
