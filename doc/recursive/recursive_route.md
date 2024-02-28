@@ -188,7 +188,7 @@ done:
 
 #### The Handling of zebra_rnh_refresh_dependents()
 
-This new added function is inserted into the existing route convergence process, allowing Zebra to achieve route convergence in the case where the reachability of recursive routes remains unchanged.
+This newly added function is inserted into the existing route convergence process, enabling Zebra to swiftly refresh nexthops in the dataplane before notifying the protocol client of route updates.
 
 <figure align=center>
     <img src="images/zebra_rnh_refresh_dependents.png" >
