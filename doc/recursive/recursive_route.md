@@ -248,8 +248,7 @@ As in the previous section, the state of the nexthop dependency for a quick data
     <figcaption>Figure 7. NHG state for dataplane<figcaption>
 </figure>
 
-The nexthop ID remains unchanged, facilitating a fast refresh by the dataplane.
-However, for the view of the reachability of nexthop 73 (for route 2.2.2.2/32), there is no need to recreate it for recursive route updating again, since the reachability hasn't changed. After introducing the "Nexthop Group Preserving" enhancement, the desired goal is as illustrated in the following diagram.
+When the dependent NHG (for route 200.0.0.0/24) is updated by Zebra, such as NHG 75 changing to NHG 90 as shown in the diagram, we update the dependent NHG of NHG 74 from the original NHG 75 to NHG 90. Then, we refresh the dataplane with NHG 74 again to immediately reflect the reachability status of ECMP paths and avoid packet loss.
 
 ### Dataplane Refresh for Recursive route
 Zebra only refreshes the NHG to the dataplane for a quick packet loss fix.
