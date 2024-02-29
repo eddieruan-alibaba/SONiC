@@ -21,9 +21,10 @@
     - [Data Structure Modifications](#data-structure-modifications)
       - [struct rnh](#struct-rnh)
     - [zebra\_rnh\_refresh\_depends()](#zebra_rnh_refresh_depends)
+    - [Nexthop Group Preserving](#nexthop-group-preserving)
     - [Nexthop Dependency State](#nexthop-dependency-state)
-  - [Dataplane Refresh for Recursive route](#dataplane-refresh-for-recursive-route)
-  - [FPM's new schema for recursive nexthop group](#fpms-new-schema-for-recursive-nexthop-group)
+  - [Data Plane Refresh for Recursive route](#data-plane-refresh-for-recursive-route)
+  - [FPM's New Schema for Recursive Nexthop Group](#fpms-new-schema-for-recursive-nexthop-group)
   - [Orchagent changes](#orchagent-changes)
 - [Unit Test](#unit-test)
   - [Normal Case's Forwarding Chain Information](#normal-cases-forwarding-chain-information)
@@ -256,10 +257,10 @@ As in the previous section, if NHGs can be preserved, the status of the nexthop 
 
 When the dependent NHG (for route 200.0.0.0/24) is updated by Zebra, such as NHG 75 changing to NHG 90 as shown in the diagram, we update the dependent NHG of NHG 74 from the original NHG 75 to NHG 90. Then, we refresh the dataplane with NHG 74 again to immediately reflect the reachability status of ECMP paths and avoid packet loss.
 
-### Dataplane Refresh for Recursive route
+### Data Plane Refresh for Recursive route
 Zebra only refreshes the NHG to the data plane for a quick packet loss fix.
 
-### FPM's new schema for recursive nexthop group
+### FPM's New Schema for Recursive Nexthop Group
 We rely on BRCM and NTT's changes.
 
 ### Orchagent changes
