@@ -190,7 +190,7 @@ This newly added function is inserted into the existing route convergence proces
     <figcaption>Figure 5. zebra_rnh_refresh_depends()<figcaption>
 </figure>
 
-The function in the blue serves fast nexthop refreshing. It runs before the protocol client's notification for route updating.
+The function in the blue serves a quick nexthop refreshing. It runs before the protocol client's notification for route updating.
 
 zebra_rnh_refresh_depends() is called as follows:
 
@@ -233,8 +233,8 @@ Explanation of the functions above:
 
 1. rib_process() eventually calls zebra_rnh_eval_nexthop_entry() after finishing one route updating task
 2. If a tracked nexthop has resolution changed, zebra_rnh_refresh_depends() is invoked before the protocol client notification is sent
-3. zebra_rnh_refresh_depends() finds the corresponding nexthop group (nhe), then uses this nhe as parameter for zebra_rnh_eval_dependents()
-4. zebra_rnh_eval_dependents() traverses backward to locate the parent nhe that depends on the current nhe. It then updates the parent nhe's dependency tree with the new one and proceeds to perform a nexthop refresh for the parent nhe to dataplane.
+3. zebra_rnh_refresh_depends() finds the corresponding nexthop group (nhe), updates its dependencies, and then uses this nhe for a quick dataplane refresh to avoid packet loss.
+4. Zebra continues the client notify process, proceeding with the next round of recursive route iteration to refresh the resolution of nexthops to their final state
 
 #### Nexthop Dependency Update
 As previous section, once a route has some path changes, recursive route updating will proceed along the reverse path of dependency. By the original approach of the routes updating, all nexthop on that direction will be recreated. As shown in the diagram, when the path 10.0.1.28 is removed, all dependent nexthops originating from it will be recreated, as indicated by the red text in the diagram.
