@@ -20,11 +20,8 @@
   - [Nexthop Refresh Handling](#nexthop-refresh-handling)
     - [Data Structure Modifications](#data-structure-modifications)
       - [struct rnh](#struct-rnh)
-    - [zebra\_rnh\_refresh\_dependents()](#zebra_rnh_refresh_depends)
-    - [Nexthop Dependency Update](#nexthop-dependency-update)
-    - [Data Structure Modifications](#data-structure-modifications-1)
-    - [The Handling of nexthop\_active\_update()](#the-handling-of-nexthop_active_update)
-  - [Special Considerations for EVPN Overlay Routes](#special-considerations-for-evpn-overlay-routes)
+    - [zebra\_rnh\_refresh\_depends()](#zebra_rnh_refresh_depends)
+    - [Nexthop Dependency State](#nexthop-dependency-state)
   - [Dataplane Refresh for Recursive route](#dataplane-refresh-for-recursive-route)
   - [FPM's new schema for recursive nexthop group](#fpms-new-schema-for-recursive-nexthop-group)
   - [Orchagent changes](#orchagent-changes)
@@ -244,18 +241,15 @@ By the original approach of the routes updating, once a route has some path chan
     <figcaption>Figure 6. nexthop dependents change<figcaption>
 </figure>
 
-As previous section, the state of the nexthop dependency during the execution of a quick dataplane refresh is as follows:
+As in the previous section, the state of the nexthop dependency for a quick dataplane refresh is as follows:
 
 <figure align=center>
-    <img src="images/nhg_change2.png" >
-    <figcaption>Figure 7. NHG dependents preserved<figcaption>
+    <img src="images/nhg_state.png" >
+    <figcaption>Figure 7. NHG state for dataplane<figcaption>
 </figure>
 
 The nexthop ID remains unchanged, facilitating a fast refresh by the dataplane.
 However, for the view of the reachability of nexthop 73 (for route 2.2.2.2/32), there is no need to recreate it for recursive route updating again, since the reachability hasn't changed. After introducing the "Nexthop Group Preserving" enhancement, the desired goal is as illustrated in the following diagram.
-
-### Special Considerations for EVPN Overlay Routes
-TODO:
 
 ### Dataplane Refresh for Recursive route
 Zebra only refreshes the NHG to the dataplane for a quick packet loss fix.
