@@ -237,14 +237,14 @@ Explanation of the functions above:
 4. Zebra continues the client notify process, proceeding with the next round of recursive route iteration to refresh the resolution of nexthops to their final state
 
 #### Nexthop Dependency Update
-As previous section, once a route has some path changes, recursive route updating will proceed along the reverse path of dependency. By the original approach of the routes updating, all nexthop on that direction will be recreated. As shown in the diagram, when the path 10.0.1.28 is removed, all dependent nexthops originating from it will be recreated, as indicated by the red text in the diagram.
+By the original approach of the routes updating, once a route has some path changes, recursive route updating will proceed along the reverse path of dependency, all nexthop along the path will be recreated. As shown in the diagram, when the path 10.0.1.28 is removed, all dependent nexthops originating from it will be recreated, as indicated by the red text in the diagram.
 
 <figure align=center>
     <img src="images/nhg_change1.png" >
     <figcaption>Figure 6. nexthop dependents change<figcaption>
 </figure>
 
-However, for the view of the reachability of nexthop 73 (for route 2.2.2.2/32), there is no need to recreate it for recursive route updating again, since the reachability hasn't changed. After introducing the "Nexthop Group Preserving" enhancement, the desired goal is as illustrated in the following diagram.
+As mentioned above, the state of the nexthop dependency during the execution of a quick dataplane refresh is as follows:
 
 <figure align=center>
     <img src="images/nhg_change2.png" >
@@ -252,22 +252,13 @@ However, for the view of the reachability of nexthop 73 (for route 2.2.2.2/32), 
 </figure>
 
 The nexthop ID remains unchanged, facilitating a fast refresh by the dataplane.
-
-#### Data Structure Modifications
-``` c
-/* The nexthop group id should remain unchanged during resolving */
-#define ROUTE_ENTRY_NHG_ID_PRESERVED      0x80
-```
-This flag for struct route_entry indicates that the nexthop group shouldn't change during route's recursive resolving, it also implies that the route with this flag only has some nexthop path change, but the reachability of it remains same.
-
-#### The Handling of nexthop_active_update()
-The modification made to nexthop_active_update() preserves the associated nexthop group of routes with the ROUTE_ENTRY_NHG_ID_PRESERVED flag set during recursive route resolution. It recursively resolves them in place. Once the resolution is complete, the nexthop group resolution is refreshed, and no new nexthop groups are created.
+However, for the view of the reachability of nexthop 73 (for route 2.2.2.2/32), there is no need to recreate it for recursive route updating again, since the reachability hasn't changed. After introducing the "Nexthop Group Preserving" enhancement, the desired goal is as illustrated in the following diagram.
 
 ### Special Considerations for EVPN Overlay Routes
 TODO:
 
 ### Dataplane Refresh for Recursive route
-Zebra only update the nexthop to dataplane for fast dataplane refresh.
+Zebra only refreshes the NHG to the dataplane for a quick packet loss fix.
 
 ### FPM's new schema for recursive nexthop group
 We rely on BRCM and NTT's changes.
