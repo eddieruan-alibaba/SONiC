@@ -95,7 +95,7 @@ A brief description of Zebra's current recursive convergence process below
     <figcaption>Figure 2. route convergence process<figcaption>
 </figure>
 
-Recursive route handling is carried out during the replay of route updates, and zebra_rib_evaluate_rn_nexthops() can be seen as the entry point for this process. It starts from the incoming route node and retrieves its NHT list. Then, it iterates through each nexthop(prefix) in the NHT list, utilizing the prefix to invoke zebra_evaluate_rnh(). The processing works as follows:
+Recursive route handling is carried out during the replay of route updates, and zebra_rib_evaluate_rn_nexthops() can be seen as the entry point for this process. It starts from the incoming route node and retrieves its NHT list. Then, it iterates through each nexthop (prefix) in the NHT list, utilizing the prefix to invoke zebra_evaluate_rnh(). The processing works as follows:
 
 1. identify the new route entry to resolve the nexthop
 2. compare the new route entry with the previous one, if they are not same, update the nexthop resolving state as the new route entry, and then send a nexthop change notification to protocol clients
@@ -143,7 +143,7 @@ If the path 10.1.0.28 of prefix 200.0.0.0/24 is removed, Zebra will explicitly u
 
 #### Data Structure Modifications
 ##### struct rnh
-zebra_rib_evaluate_rn_nexthops() triggers routes updating through nexthop backwalk. Without the assistance of protocol clients, a method needs to be introduced for looking up nexthop hash struct(nhe) based on the prefix of the NHT list. e.g. Finding the nhe based on the prefix 200.0.0.1.
+zebra_rib_evaluate_rn_nexthops() triggers routes updating through nexthop backwalk. Without the assistance of protocol clients, a method needs to be introduced for looking up nexthop hash struct (nhe) based on the prefix of the NHT list. e.g. Finding the nhe based on the prefix 200.0.0.1.
 
 A new field nhe_id is added for this purpose.
 
