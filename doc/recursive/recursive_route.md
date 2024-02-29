@@ -119,18 +119,18 @@ Consider the case of recursive routes for EVPN underlay
 
     B>  2.2.2.2/32 [200/0] via 100.0.0.1 (recursive), weight 1, 00:11:50
       *                      via 10.1.0.16, Ethernet1, weight 1, 00:11:50
-      *                      via 10.1.0.17, Ethernet2, weight 1, 00:11:50
-      *                      via 10.1.0.18, Ethernet3, weight 1, 00:11:50
+      *                      via 10.1.0.17, Ethernet1, weight 1, 00:11:50
+      *                      via 10.1.0.18, Ethernet1, weight 1, 00:11:50
                            via 200.0.0.1 (recursive), weight 1, 00:11:50
-      *                      via 10.1.0.26, Ethernet4, weight 1, 00:11:50
-      *                      via 10.1.0.27, Ethernet5, weight 1, 00:11:50
-      *                      via 10.1.0.28, Ethernet6, weight 1, 00:11:50
+      *                      via 10.1.0.26, Ethernet1, weight 1, 00:11:50
+      *                      via 10.1.0.27, Ethernet1, weight 1, 00:11:50
+      *                      via 10.1.0.28, Ethernet1, weight 1, 00:11:50
     B>* 100.0.0.0/24 [200/0] via 10.1.0.16, Ethernet1, weight 1, 00:11:57
-      *                      via 10.1.0.17, Ethernet2, weight 1, 00:11:57
-      *                      via 10.1.0.18, Ethernet3, weight 1, 00:11:57
-    B>* 200.0.0.0/24 [200/0] via 10.1.0.26, Ethernet4, weight 1, 00:11:50
-      *                      via 10.1.0.27, Ethernet5, weight 1, 00:11:50
-      *                      via 10.1.0.28, Ethernet6, weight 1, 00:11:50
+      *                      via 10.1.0.17, Ethernet1, weight 1, 00:11:57
+      *                      via 10.1.0.18, Ethernet1, weight 1, 00:11:57
+    B>* 200.0.0.0/24 [200/0] via 10.1.0.26, Ethernet1, weight 1, 00:11:50
+      *                      via 10.1.0.27, Ethernet1, weight 1, 00:11:50
+      *                      via 10.1.0.28, Ethernet1, weight 1, 00:11:50
 
 If the path 10.1.0.28 of prefix 200.0.0.0/24 is removed, Zebra will explicitly update both routes for recursive convergence with the help of the BGP client, one for 200.0.0.0/24 and another for 2.2.2.2/32. In this scenario, although the route 200.0.0.0/24 has one path removed, but its reachability for route 2.2.2.2/32 remains unchanged. To avoid packet loss, it's crucial to do a quick refresh of nexthops in data plane for the overlay routes before Zebra completes its route convergence process.
 
