@@ -20,7 +20,7 @@
   - [Nexthop Refresh Handling](#nexthop-refresh-handling)
     - [Data Structure Modifications](#data-structure-modifications)
       - [struct rnh](#struct-rnh)
-    - [zebra\_rnh\_refresh\_dependents()](#zebra_rnh_refresh_dependents)
+    - [zebra\_rnh\_refresh\_dependents()](#zebra_rnh_refresh_depends)
     - [Nexthop Dependency Update](#nexthop-dependency-update)
     - [Data Structure Modifications](#data-structure-modifications-1)
     - [The Handling of nexthop\_active\_update()](#the-handling-of-nexthop_active_update)
@@ -186,18 +186,18 @@ done:
 }
 ```
 
-#### zebra_rnh_refresh_dependents()
+#### zebra_rnh_refresh_depends()
 
 This newly added function is inserted into the existing route convergence process, enabling Zebra to refresh nexthops in the dataplane before notifying the protocol client of route updates.
 
 <figure align=center>
-    <img src="images/zebra_rnh_refresh_dependents.png" >
-    <figcaption>Figure 5. zebra_rnh_refresh_dependents()<figcaption>
+    <img src="images/zebra_rnh_refresh_depends.png" >
+    <figcaption>Figure 5. zebra_rnh_refresh_depends()<figcaption>
 </figure>
 
 The function in the blue serves fast nexthop refreshing. It runs before the protocol client's notification for route updating.
 
-zebra_rnh_refresh_dependents() is called as follows:
+zebra_rnh_refresh_depends() is called as follows:
 
 ``` c
 static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
@@ -225,7 +225,7 @@ static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
         copy_state(rnh, re, nrn);
         state_changed = 1;
     } else if (compare_state(re, rnh->state)) {
-        zebra_rnh_refresh_dependents(rnh);        
+        zebra_rnh_refresh_depends(rnh);        
         copy_state(rnh, re, nrn);
         state_changed = 1;
     }
@@ -237,8 +237,8 @@ static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
 Explanation of the functions above:
 
 1. rib_process() eventually calls zebra_rnh_eval_nexthop_entry() after finishing one route updating task
-2. If a tracked nexthop has resolution changed, zebra_rnh_refresh_dependents() is invoked before the protocol client notification is sent
-3. zebra_rnh_refresh_dependents() finds the corresponding nexthop group (nhe), then uses this nhe as parameter for zebra_rnh_eval_dependents()
+2. If a tracked nexthop has resolution changed, zebra_rnh_refresh_depends() is invoked before the protocol client notification is sent
+3. zebra_rnh_refresh_depends() finds the corresponding nexthop group (nhe), then uses this nhe as parameter for zebra_rnh_eval_dependents()
 4. zebra_rnh_eval_dependents() traverses backward to locate the parent nhe that depends on the current nhe. It then updates the parent nhe's dependency tree with the new one and proceeds to perform a nexthop refresh for the parent nhe to dataplane.
 
 #### Nexthop Dependency Update
