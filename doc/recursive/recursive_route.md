@@ -256,7 +256,7 @@ As in the previous section, if NHGs can be preserved, the final status of the ne
     <figcaption>Figure 7. final status of the nexthop dependency of preserved NHG<figcaption>
 </figure>
 
-So a quick data plane refresh works as follows:
+So a quick data plane refresh operates as follows:
 
 <figure align=center>
     <img src="images/nhg_for_dataplane.png" >
