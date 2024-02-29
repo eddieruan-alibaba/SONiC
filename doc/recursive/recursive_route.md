@@ -271,7 +271,7 @@ Zebra only refreshes the NHG to the data plane for a quick packet loss fix.
 ### FPM's New Schema for Recursive Nexthop Group
 We rely on BRCM and NTT's changes.
 
-### Orchagent changes
+### Orchagent Changes
 We rely on BRCM and NTT's changes.
 
 ## Unit Test
