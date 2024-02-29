@@ -138,7 +138,7 @@ If the path 10.1.0.28 of prefix 200.0.0.0/24 is removed, Zebra will explicitly u
 
 <figure align=center>
     <img src="images/path_remove.png" >
-    <figcaption>Figure 3. path remove for recursive route<figcaption>
+    <figcaption>Figure 3. a path removed for recursive route<figcaption>
 </figure>
 
 #### Data Structure Modifications
