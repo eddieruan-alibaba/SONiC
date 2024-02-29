@@ -233,13 +233,21 @@ Explanation of the functions above:
 3. zebra_rnh_refresh_depends() finds the corresponding nexthop group (nhe), updates its dependencies, and then uses this nhe for a quick dataplane refresh to avoid packet loss.
 4. Zebra continues the client notify process, proceeding with the next round of recursive route iteration to refresh the resolution of nexthops to their final state
 
-#### Nexthop Dependency State
-By the original approach of the routes updating, once a route has some path changes, recursive route updating will proceed along the reverse path of dependency, all nexthop along the path will be recreated. As shown in the diagram, when the path 10.0.1.28 is removed, all dependent nexthops originating from it will be recreated, as indicated by the red text in the diagram.
+#### Nexthop Group Preserving
+
+As currently implemented, when Zebra adds or updates a route, it creates a new Nexthop Group (NHG) for that route. So, in the process of the route convergence mentioned above, even if the reachability of the NHG (such as 200.0.0.1) hasn't changed, this NHG will be recreated during the convergence process. As shown in the diagram, when the path 10.0.1.28 is removed, all dependent NHGs originating from it will be recreated, as indicated by the red text in the diagram.
 
 <figure align=center>
     <img src="images/nhg_change.png" >
-    <figcaption>Figure 6. nexthop dependents change<figcaption>
+    <figcaption>Figure 6. nexthop changes when routes converge<figcaption>
 </figure>
+
+In order to facilitate a fast refresh by the data plane, the NHGs meeting the following conditions should be preserved:
+- NHG of a singleton nexthop
+- NHG for a group of unchanged singleton nexthops
+
+#### Nexthop Dependency State
+By the original approach of the routes updating, once a route has some path changes, recursive route updating will proceed along the reverse path of dependency, all nexthop along the path will be recreated. As shown in the diagram, when the path 10.0.1.28 is removed, all dependent nexthops originating from it will be recreated, as indicated by the red text in the diagram.
 
 As in the previous section, the state of the nexthop dependency for a quick dataplane refresh is as follows:
 
