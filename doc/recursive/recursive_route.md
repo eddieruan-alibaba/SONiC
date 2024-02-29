@@ -168,11 +168,6 @@ static bool zebra_nhe_find(struct nhg_hash_entry **nhe, /* return value */
                struct nhg_connected_tree_head *nhg_depends,
                afi_t afi, bool from_dplane)
 {
-    bool created = false;
-    bool recursive = false;
-    struct nhg_hash_entry *newnhe, *backup_nhe;
-    struct nexthop *nh = NULL;
-
     ...
 
 done:
