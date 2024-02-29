@@ -25,7 +25,7 @@
     - [Nexthop Dependency State](#nexthop-dependency-state)
   - [Data Plane Refresh for Recursive Route](#data-plane-refresh-for-recursive-route)
   - [FPM's New Schema for Recursive Nexthop Group](#fpms-new-schema-for-recursive-nexthop-group)
-  - [Orchagent changes](#orchagent-changes)
+  - [Orchagent Changes](#orchagent-changes)
 - [Unit Test](#unit-test)
   - [Normal Case's Forwarding Chain Information](#normal-cases-forwarding-chain-information)
   - [Test Case 1: local link failure](#test-case-1-local-link-failure)
