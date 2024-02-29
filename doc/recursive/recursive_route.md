@@ -236,15 +236,15 @@ Explanation of the functions above:
 3. zebra_rnh_refresh_depends() finds the corresponding nexthop group (nhe), updates its dependencies, and then uses this nhe for a quick dataplane refresh to avoid packet loss.
 4. Zebra continues the client notify process, proceeding with the next round of recursive route iteration to refresh the resolution of nexthops to their final state
 
-#### Nexthop Dependency Update
+#### Nexthop Dependency State
 By the original approach of the routes updating, once a route has some path changes, recursive route updating will proceed along the reverse path of dependency, all nexthop along the path will be recreated. As shown in the diagram, when the path 10.0.1.28 is removed, all dependent nexthops originating from it will be recreated, as indicated by the red text in the diagram.
 
 <figure align=center>
-    <img src="images/nhg_change1.png" >
+    <img src="images/nhg_change.png" >
     <figcaption>Figure 6. nexthop dependents change<figcaption>
 </figure>
 
-As mentioned above, the state of the nexthop dependency during the execution of a quick dataplane refresh is as follows:
+As previous section, the state of the nexthop dependency during the execution of a quick dataplane refresh is as follows:
 
 <figure align=center>
     <img src="images/nhg_change2.png" >
