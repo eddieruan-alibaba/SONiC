@@ -8,25 +8,20 @@
 
 <!-- omit in toc -->
 ## Table of Content
-- [Goal and Scope](#goal-and-scope)
+- [Scope](#scope)
 - [Requirements Overview](#requirements-overview)
 - [Zebra Current Approach for Recursive Routes](#zebra-current-approach-for-recursive-routes)
   - [Data Structure for Recursive Handling](#data-structure-for-recursive-handling)
-    - [NH Dependency Tree](#nh-dependency-tree)
+    - [Nexthop Dependency Tree](#nexthop-dependency-tree)
     - [NHT List from Route Node](#nht-list-from-route-node)
   - [Recursive Route Handling](#recursive-route-handling)
 - [High Level Design](#high-level-design)
   - [Triggers Events for Recursive Handling](#triggers-events-for-recursive-handling)
-  - [Optimization of Recursive Route Handling](#optimization-of-recursive-route-handling)
+  - [Nexthop Refresh Handling](#nexthop-refresh-handling)
     - [Data Structure Modifications](#data-structure-modifications)
-      - [struct nhg\_hash\_entry](#struct-nhg_hash_entry)
-      - [struct route\_entry](#struct-route_entry)
       - [struct rnh](#struct-rnh)
-    - [The Handling of zebra\_rnh\_refresh\_dependents()](#the-handling-of-zebra_rnh_refresh_dependents)
-  - [Nexthop Group Preserving](#nexthop-group-preserving)
-    - [Data Structure Modifications](#data-structure-modifications-1)
-    - [The Handling of nexthop\_active\_update()](#the-handling-of-nexthop_active_update)
-  - [Special Considerations for EVPN Overlay Routes](#special-considerations-for-evpn-overlay-routes)
+    - [zebra\_rnh\_refresh\_depends()](#zebra_rnh_refresh_depends)
+    - [Nexthop Dependency State](#nexthop-dependency-state)
   - [Dataplane Refresh for Recursive route](#dataplane-refresh-for-recursive-route)
   - [FPM's new schema for recursive nexthop group](#fpms-new-schema-for-recursive-nexthop-group)
   - [Orchagent changes](#orchagent-changes)
@@ -39,32 +34,26 @@
   - [Test Case 5: Remote PE-CE link failure](#test-case-5-remote-pe-ce-link-failure)
 - [References](#references)
 
-## Goal and Scope
-A recursive route is a routing mechanism in which the routing decision for a specific destination is determined by referring to another routing table, which is then looked up recursively until a final route is resolved. Recursive routing is a key concept in routing protocols and is often used in complex network topologies to ensure that data reaches its intended destination, even when that destination is not directly reachable from the originating device. In many cases, recursive routes are used in VPN or tunneling scenarios.
-
-- This HLD focus on recursive route convergence handling. Since SONiC doesn't have MPLS VPN support in master, the testing would focus on EVPN and SRv6 VPN only. 
-- The approach applied to the handling of recursive routes in Per-VRF.
+## Scope
+This document is for reducing packet loss when Zebra handles convergence for millions of recursive routes on SONiC. Since SONiC doesn't have MPLS VPN support in master, the testing would focus on EVPN and SRv6 VPN only. 
 
 ## Requirements Overview
-This HLD focuses on Zebra and introduces two enhancements for recursive routes. The first is to recalculate route changes (additions/updates/withdrawals) independently, without relying on the protocol client in certain cases. The second is to optimize the convergence logic of recursive route. If Zebra serves as the control plane, then corresponding adjustments may be made to FPM and Orchagent to collaborate with it, thereby enhancing the overall efficiency of route convergence.
-
+This HLD introducing a method for fast recovering from packet loss in the event of underlay ECMP path changes. Since Zebra serves as the control plane on SONiC, then corresponding adjustments may be made to FPM and Orchagent to collaborate with it.
 - Fpm needs to add a new schema to take each member as nexthop group ID and update APP DB. (Rely on BRCM and NTT's changes)
 - Orchagent picks up event from APP DB and trigger nexthop group programming. Neighorch needs to handle this new schema without change too much on existing codes. (Rely on BRCM and NTT's changes)
 
-## Zebra Current Approach for Recursive Routes
-Zebra uses struct nexthop to track nexthop information. If it is a recursive nexthop, its flags field would be set NEXTHOP_FLAG_RECURSIVE bit and its resolved field stores a pointer which points a list of nexthops obtained by recursive resolution. Therefore Zebra keeps hierarchical relationships on the recursive nexthops. Because the Linux kernel lacks support for recursive routes, FRR Zebra flattens the nexthop information of recursive routes when transferring it from Zebra to FPM or the Linux kernel. Currently, when a path goes down, Zebra would inform various protocol processes and let them replay routes update events accordingly. 
-
-This leads an issue discussed in the SONiC Routing Working Group (https://lists.sonicfoundation.dev/g/sonic-wg-routing/files/SRv6%20use%20case%20-%20Routing%20WG.pptx).
+Because the Linux kernel lacks support for recursive routes, FRR Zebra flattens the nexthop information of recursive routes when transferring it from Zebra to FPM or the Linux kernel. Currently, when a path goes down, Zebra would inform various protocol processes and let them replay routes update events accordingly. This leads an issue discussed in the SONiC Routing Working Group (https://lists.sonicfoundation.dev/g/sonic-wg-routing/files/SRv6%20use%20case%20-%20Routing%20WG.pptx).
 
 <figure align=center>
     <img src="images/srv6_igp2bgp.png" >
     <figcaption>Figure 1. Alibaba issue Underlay routes flap affecting Overlay SRv6 routes <figcaption>
-</figure> 
+</figure>
 
-To solve this issue, we need to introduce Prefix Independent Convergence (PIC) to FRR/SONiC. PIC concept is described in IEFT https://datatracker.ietf.org/doc/draft-ietf-rtgwg-bgp-pic/. It is not a BGP feature, but a RIB/FIB feeature on the device. PIC has two basic concepts, PIC core and PIC edge. The following HLD focuses on PIC edge's enhancement https://datatracker.ietf.org/doc/draft-ietf-rtgwg-bgp-pic/. This HLD is outline an approach which could prevent BGP load balancing updates from being triggered by IGP load balancing updates, a.k.a PIC core approach for the recursive VPN route support. 
+To solve this issue, we need to introduce Prefix Independent Convergence (PIC) to FRR/SONiC. PIC concept is described in IEFT https://datatracker.ietf.org/doc/draft-ietf-rtgwg-bgp-pic/. It is not a BGP feature, but a RIB/FIB feature on the device. PIC has two basic concepts, PIC core and PIC edge. The following HLD focuses on PIC edge's enhancement https://github.com/eddieruan-alibaba/SONiC/blob/eruan-pic/doc/pic/bgp_pic_edge.md. This HLD is outline an approach which could prevent BGP load balancing updates from being triggered by IGP load balancing updates, a.k.a PIC core approach for the recursive VPN route support.
 
+## Zebra Current Approach for Recursive Routes
 ### Data Structure for Recursive Handling
-#### NH Dependency Tree
+#### Nexthop Dependency Tree
 struct nexthop contains two fields, *resolved and *reparent for tracking nexthop resolution's dependencies. 
 
 	/* Nexthops obtained by recursive resolution.
@@ -96,11 +85,18 @@ Each route node (struct rib_dest_t) contains an nht field, which stores all next
 This list is updated when a new route is added or a nexthop is registered by the protocol clients.
 
 ### Recursive Route Handling
-The handling is carried out during the replay of route updates, and zebra_rib_evaluate_rn_nexthops() can be seen as the entry point for this process. It starts from the incoming route node and retrieves its NHT list. Then, it iterates through each nexthop(prefix) in the NHT list, utilizing the prefix to invoke zebra_evaluate_rnh(). This function works as follows:
+A brief description of Zebra's current recursive convergence process below
+
+<figure align=center>
+    <img src="images/route_converge_original.png" >
+    <figcaption>Figure 2. route convergence process<figcaption>
+</figure>
+
+Recursive route handling is carried out during the replay of route updates, and zebra_rib_evaluate_rn_nexthops() can be seen as the entry point for this process. It starts from the incoming route node and retrieves its NHT list. Then, it iterates through each nexthop (prefix) in the NHT list, utilizing the prefix to invoke zebra_evaluate_rnh(). The processing works as follows:
 
 1. identify the new route entry to resolve the nexthop
 2. compare the new route entry with the previous one, if they are not same, update the nexthop resolving state as the new route entry, and then send a nexthop change notification to protocol clients
-3. protocol clients recalculate the path associated with the nexthop, then resend the corresponding route to Zebra.
+3. protocol clients recalculate the path associated with the nexthop, then resend the corresponding route update to Zebra.
 4. Zebra processes this route and the route's nexthop is recursively resolved and also flattened
 6. at the end of route updating, zebra_rib_evaluate_rn_nexthops() is called with the route's NHT list, and then it returns to step 1. This loop procedure contributes to recursive route convergence
 
@@ -117,7 +113,7 @@ Here are a list of trigger events which we want to take care for getting recursi
 | Case 4: BGP remote PE node failure  | BGP remote node down | It should be detected by IGP remote node down first before BGP reacts, a.k.a the same as the above steps. This is the PIC edge handling case.|
 | Case 5: Remote PE-CE link failure | This is remote PE's PIC local case.  | Remote PE will trigger PIC local handling for quick traffic fix up. Local PE will be updated after BGP gets informed. |
 
-### Optimization of Recursive Route Handling
+### Nexthop Refresh Handling
 Consider the case of recursive routes for EVPN underlay
 
     B>  2.2.2.2/32 [200/0] via 100.0.0.1 (recursive), weight 1, 00:11:50
@@ -135,106 +131,16 @@ Consider the case of recursive routes for EVPN underlay
       *                      via 10.1.0.27, Ethernet5, weight 1, 00:11:50
       *                      via 10.1.0.28, Ethernet6, weight 1, 00:11:50
 
-If the path 10.1.0.28 of prefix 200.0.0.0/24 is removed, Zebra will explicitly update both routes for recursive convergence with the help of the BGP client, one for 200.0.0.0/24 and another for 2.2.2.2/32. In this scenario, although the route 200.0.0.0/24 has one path removed, but its reachability for route 2.2.2.2/32 remains unchanged . Zebra has the dependency relationships between these recursive routes, so there is a chance to improve Zebra for route convergence.
+If the path 10.1.0.28 of prefix 200.0.0.0/24 is removed, Zebra will explicitly update both routes for recursive convergence with the help of the BGP client, one for 200.0.0.0/24 and another for 2.2.2.2/32. In this scenario, although the route 200.0.0.0/24 has one path removed, but its reachability for route 2.2.2.2/32 remains unchanged. To avoid packet loss, it's crucial to do a quick refresh of nexthops in dataplane for the overlay routes before Zebra completes its route convergence process.
 
 <figure align=center>
-    <img src="images/path_remove1.png" >
-    <figcaption>Figure 2. path remove for recursive route<figcaption>
+    <img src="images/path_remove.png" >
+    <figcaption>Figure 3. a path removed for recursive route<figcaption>
 </figure>
 
 #### Data Structure Modifications
-In order to enable Zebra to update routes without notifying protocol clients, it should be able to obtain the route node associated with the nexthop that has undergone changes. Some back pointer fields need to be added.
-
-<figure align=center>
-    <img src="images/data_struct.png" >
-    <figcaption>Figure 3. data structure modification for routes update<figcaption>
-</figure>
-
-##### struct nhg_hash_entry 
-New field struct list *routes in struct nhg_hash_entry
-
-    struct nhg_hash_entry {
-        ...
-
-        struct nhg_connected_tree_head nhg_depends, nhg_dependents;
-
-        /* List of routes for this nhe. */
-        struct list *routes;
-
-        ...
-    }
-
-##### struct route_entry
-New field struct list *routes in struct route_entry
-
-    struct route_entry {       
-        ...
-
-        /* dest referring to this re */
-        struct rib_dest_t_ *pdest;
-
-        ...
-    }
-
-Functions initialize the backwalk pointers.
-``` c
-static void rib_link(struct route_node *rn, struct route_entry *re, int process)
-{
-    rib_dest_t *dest;
-    afi_t afi;
-    const char *rmap_name;
-
-    ...
-
-    re_list_add_head(&dest->routes, re);
-    re->pdest = dest;
-
-    ...	
-}
-```
-
-``` c
-int route_entry_update_nhe(struct route_entry *re, struct nhg_hash_entry *new_nhghe)
-{
-    struct nhg_hash_entry *old;
-    int ret = 0;
-
-    if (new_nhghe == NULL) {
-        if (re->nhe) {
-            if (re->nhe->routes)
-                listnode_delete(re->nhe->routes, re);
-                zebra_nhg_decrement_ref(re->nhe);
-            }
-            re->nhe = NULL;
-            goto done;
-    }
-
-    if ((re->nhe_id != 0) && re->nhe && (re->nhe != new_nhghe)) {
-        old = re->nhe;
-
-        route_entry_attach_ref(re, new_nhghe);
-        if (!new_nhghe->routes)
-            new_nhghe->routes = list_new();
-        listnode_add(new_nhghe->routes, re);
-        if (old) {
-            if (old->routes)
-                listnode_delete(old->routes, re);
-            zebra_nhg_decrement_ref(old);
-        }
-    } else if (!re->nhe) {
-        /* This is the first time it's being attached */
-        route_entry_attach_ref(re, new_nhghe);
-        if (!new_nhghe->routes)
-            new_nhghe->routes = list_new();
-        listnode_add(new_nhghe->routes, re);
-    }
-done:
-    return ret;
-}
-```
-
 ##### struct rnh
-zebra_rib_evaluate_rn_nexthops() triggers routes updating through nexthop backwalk. Without the assistance of protocol clients, a method needs to be introduced for looking up nexthop hash struct(nhe) based on the prefix of the NHT list. e.g. Finding the nhe based on the prefix 100.0.0.1.
+zebra_rib_evaluate_rn_nexthops() triggers routes updating through nexthop backwalk. Without the assistance of protocol clients, a method needs to be introduced for looking up nexthop hash struct (nhe) based on the prefix of the NHT list. e.g. Finding the nhe based on the prefix 200.0.0.1.
 
 A new field nhe_id is added for this purpose.
 
@@ -259,11 +165,6 @@ static bool zebra_nhe_find(struct nhg_hash_entry **nhe, /* return value */
                struct nhg_connected_tree_head *nhg_depends,
                afi_t afi, bool from_dplane)
 {
-    bool created = false;
-    bool recursive = false;
-    struct nhg_hash_entry *newnhe, *backup_nhe;
-    struct nexthop *nh = NULL;
-
     ...
 
 done:
@@ -277,29 +178,18 @@ done:
 }
 ```
 
-#### The Handling of zebra_rnh_refresh_dependents()
+#### zebra_rnh_refresh_depends()
 
-This new added function is inserted into the existing route convergence process, allowing Zebra to achieve route convergence in the case where the reachability of recursive routes remains unchanged.
-
-Provide a brief description of Zebra's original recursive convergence process.
+This newly added function is inserted into the existing route convergence process, enabling Zebra to refresh nexthops in the dataplane before notifying the protocol client of route updates.
 
 <figure align=center>
-    <img src="images/route_converge_original.png" >
-    <figcaption>Figure 4. route convergence process<figcaption>
+    <img src="images/zebra_rnh_refresh_depends.png" >
+    <figcaption>Figure 5. zebra_rnh_refresh_depends()<figcaption>
 </figure>
 
-Route/Nexthop dependents are built or refreshed from the bottom up with each invocation of zebra_rnh_eval_nexthop_entry().
+The function in the blue serves a quick nexthop refreshing. It runs before the protocol client's notification for route updating.
 
-After the insertion of zebra_rnh_refresh_dependents() into the original recursive convergence process.
-
-<figure align=center>
-    <img src="images/zebra_rnh_refresh_dependents.png" >
-    <figcaption>Figure 5. zebra_rnh_refresh_dependents()<figcaption>
-</figure>
-
-The logic in the red portion of the code will achieve fast route convergence updating. But it won't completely disable the protocol client's notification mechanism because when the reachability of routes that the NHT list depends on changes, i.e., when the routes it depends on change completely to another one, Zebra will still use the original protocol client notify mechanism for route convergence. In other words, the blue portion will only take effect when there's an increase or decrease in the paths corresponding to the nexthop group that doesn't affect route reachability.
-
-zebra_rnh_refresh_dependents() is called as follows:
+zebra_rnh_refresh_depends() is called as follows:
 
 ``` c
 static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
@@ -327,9 +217,9 @@ static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
         copy_state(rnh, re, nrn);
         state_changed = 1;
     } else if (compare_state(re, rnh->state)) {
-        if (re->nhe->id != rnh->state->nhe->id)
-            zebra_rnh_refresh_dependents(rnh);
+        zebra_rnh_refresh_depends(rnh);        
         copy_state(rnh, re, nrn);
+        state_changed = 1;
     }
     zebra_rnh_store_in_routing_table(rnh);
     ...
@@ -338,44 +228,30 @@ static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
 
 Explanation of the functions above:
 
-1. rib_process() eventually calls zebra_rnh_eval_nexthop_entry() after finishing the route updating task
-2. zebra_rnh_eval_nexthop_entry() see if a tracked nexthop has resolution changed, if it is true, zebra_rnh_refresh_dependents() is invoked, otherwise, the original protocol client notify mechanism is used, as step 6, zebra_rnh_notify_protocol_clients()
-3. zebra_rnh_refresh_dependents() finds the corresponding nexthop group (nhe), then uses this nhe as parameter for zebra_rnh_eval_dependents()
-4. zebra_rnh_eval_dependents() walks back and find the routes depends on the nhe, then requeue the routes to working queue for rib_process() again. A new added flag ROUTE_ENTRY_NHG_ID_PRESERVED is set for this route, to indicate that its recursive reachability is unchanged
-5. In each round of rib_process(), the rnh's resolving route status will be checked in zebra_rnh_eval_nexthop_entry(). The backwalk for recursive route convergence stops if the rnh is resolved on a route with same nhe id as the previous resolving route or the rnh list is empty.
+1. rib_process() eventually calls zebra_rnh_eval_nexthop_entry() after finishing one route updating task
+2. If a tracked nexthop has resolution changed, zebra_rnh_refresh_depends() is invoked before the protocol client notification is sent
+3. zebra_rnh_refresh_depends() finds the corresponding nexthop group (nhe), updates its dependencies, and then uses this nhe for a quick dataplane refresh to avoid packet loss.
+4. Zebra continues the client notify process, proceeding with the next round of recursive route iteration to refresh the resolution of nexthops to their final state
 
-### Nexthop Group Preserving
-As previous section, once a route has some path changes, recursive route updating will proceed along the reverse path of dependency. By the original approach of the routes updating, all nexthop on that direction will be recreated. As shown in the diagram, when the path 10.0.1.28 is removed, all dependent nexthops originating from it will be recreated, as indicated by the red text in the diagram.
+#### Nexthop Dependency State
+By the original approach of the routes updating, once a route has some path changes, recursive route updating will proceed along the reverse path of dependency, all nexthop along the path will be recreated. As shown in the diagram, when the path 10.0.1.28 is removed, all dependent nexthops originating from it will be recreated, as indicated by the red text in the diagram.
 
 <figure align=center>
-    <img src="images/nhg_change1.png" >
+    <img src="images/nhg_change.png" >
     <figcaption>Figure 6. nexthop dependents change<figcaption>
 </figure>
 
-However, for the view of the reachability of nexthop 88, 89, there is no need to recreate them for recursive route updating again, since the reachability hasn't changed. After introducing the "Nexthop Group Preserving" enhancement, the desired goal is as illustrated in the following diagram.
+As in the previous section, the state of the nexthop dependency for a quick dataplane refresh is as follows:
 
 <figure align=center>
-    <img src="images/nhg_change2.png" >
-    <figcaption>Figure 7. NHG dependents preserved<figcaption>
+    <img src="images/nhg_state.png" >
+    <figcaption>Figure 7. NHG state for dataplane<figcaption>
 </figure>
 
-The dependent nexthops chain all the way up for the newly updated nexthop group 90 is untouched.
-
-#### Data Structure Modifications
-``` c
-/* The nexthop group id should remain unchanged during resolving */
-#define ROUTE_ENTRY_NHG_ID_PRESERVED      0x80
-```
-This flag for struct route_entry indicates that the nexthop group shouldn't change during route's recursive resolving, it also implies that the route with this flag only has some nexthop path change, but the reachability of it remains same.
-
-#### The Handling of nexthop_active_update()
-The modification made to nexthop_active_update() preserves the associated nexthop group of routes with the ROUTE_ENTRY_NHG_ID_PRESERVED flag set during recursive route resolution. It recursively resolves them in place. Once the resolution is complete, the nexthop group resolution is refreshed, and no new nexthop groups are created.
-
-### Special Considerations for EVPN Overlay Routes
-TODO:
+When the dependent NHG (for route 200.0.0.0/24) is updated by Zebra, such as NHG 75 changing to NHG 90 as shown in the diagram, we update the dependent NHG of NHG 74 from the original NHG 75 to NHG 90. Then, we refresh the dataplane with NHG 74 again to immediately reflect the reachability status of ECMP paths and avoid packet loss.
 
 ### Dataplane Refresh for Recursive route
-TODO: As the recursive nexthop group and its dependents remain unchanged, Zebra is able to skip reinstall the route again? Instead of only update the nexthop group to kernel?
+Zebra only refreshes the NHG to the dataplane for a quick packet loss fix.
 
 ### FPM's new schema for recursive nexthop group
 We rely on BRCM and NTT's changes.
@@ -388,34 +264,34 @@ We rely on BRCM and NTT's changes.
 ### Test Case 1: local link failure
 <figure align=center>
     <img src="images/testcase1.png" >
-    <figcaption>Figure 11.local link failure <figcaption>
+    <figcaption>Figure 8.local link failure <figcaption>
 </figure>
 
 ### Test Case 2: IGP remote link/node failure
 <figure align=center>
     <img src="images/testcase2.png" >
-    <figcaption>Figure 12. IGP remote link/node failure
+    <figcaption>Figure 9. IGP remote link/node failure
  <figcaption>
 </figure>
 
 ### Test Case 3: IGP remote PE failure
 <figure align=center>
     <img src="images/testcase3.png" >
-    <figcaption>Figure 13. IGP remote PE failure
+    <figcaption>Figure 10. IGP remote PE failure
  <figcaption>
 </figure>
 
 ### Test Case 4: BGP remote PE node failure
 <figure align=center>
     <img src="images/testcase4.png" >
-    <figcaption>Figure 14. BGP remote PE node failure
+    <figcaption>Figure 11. BGP remote PE node failure
  <figcaption>
 </figure>
 
 ### Test Case 5: Remote PE-CE link failure
 <figure align=center>
     <img src="images/testcase5.png" >
-    <figcaption>Figure 15. Remote PE-CE link failure
+    <figcaption>Figure 12. Remote PE-CE link failure
  <figcaption>
 </figure>
 
