@@ -23,7 +23,7 @@
     - [zebra\_rnh\_refresh\_depends()](#zebra_rnh_refresh_depends)
     - [Nexthop Group Preserving](#nexthop-group-preserving)
     - [Nexthop Dependency State](#nexthop-dependency-state)
-  - [Data Plane Refresh for Recursive route](#data-plane-refresh-for-recursive-route)
+  - [Data Plane Refresh for Recursive Route](#data-plane-refresh-for-recursive-route)
   - [FPM's New Schema for Recursive Nexthop Group](#fpms-new-schema-for-recursive-nexthop-group)
   - [Orchagent changes](#orchagent-changes)
 - [Unit Test](#unit-test)
@@ -231,7 +231,7 @@ Explanation of the functions above:
 
 1. rib_process() eventually calls zebra_rnh_eval_nexthop_entry() after finishing one route updating task
 2. If a tracked nexthop has resolution changed, zebra_rnh_refresh_depends() is invoked before the protocol client notification is sent
-3. zebra_rnh_refresh_depends() finds the corresponding nexthop group (nhe), updates its dependencies, and then uses this nhe for a quick data plane refresh to avoid packet loss.
+3. zebra_rnh_refresh_depends() finds the corresponding nexthop group (nhe) and its parent nhe, and then push both of them to data plane for a quick refresh to avoid packet loss
 4. Zebra continues the client notify process, proceeding with the next round of recursive route iteration to refresh the resolution of nexthops to their final state
 
 #### Nexthop Group Preserving
@@ -248,16 +248,24 @@ In order to facilitate a fast refresh by the data plane, the NHGs meeting the fo
 - NHG for a group of unchanged singleton nexthops
 
 #### Nexthop Dependency State
-As in the previous section, if NHGs can be preserved, the status of the nexthop dependency for a quick data plane refresh is as follows:
+
+As in the previous section, if NHGs can be preserved, the final status of the nexthop dependency is as follows:
+
+<figure align=center>
+    <img src="images/nhg_status.png" >
+    <figcaption>Figure 7. final status of the nexthop dependency of preserved NHG<figcaption>
+</figure>
+
+So a quick data plane refresh works as follows:
 
 <figure align=center>
     <img src="images/nhg_for_dataplane.png" >
-    <figcaption>Figure 7. NHG for data plane<figcaption>
+    <figcaption>Figure 8. NHG for data plane refresh<figcaption>
 </figure>
 
-When the dependent NHG (for route 200.0.0.0/24) is updated by Zebra, such as NHG 75 changing to NHG 90 as shown in the diagram, we update the dependent NHG of NHG 74 from the original NHG 75 to NHG 90. Then, we refresh the dataplane with NHG 74 again to immediately reflect the reachability status of ECMP paths and avoid packet loss.
+To immediately reflect the reachability status of ECMP paths and prevent packet loss, Zebra simply needs to push the two NHGs (73, 74) into the data plane. Following this, Zebra proceeds with route convergence as usual, leaving all dependent NHGs originating from NHG 90 untouched.
 
-### Data Plane Refresh for Recursive route
+### Data Plane Refresh for Recursive Route
 Zebra only refreshes the NHG to the data plane for a quick packet loss fix.
 
 ### FPM's New Schema for Recursive Nexthop Group
@@ -271,34 +279,34 @@ We rely on BRCM and NTT's changes.
 ### Test Case 1: local link failure
 <figure align=center>
     <img src="images/testcase1.png" >
-    <figcaption>Figure 8.local link failure <figcaption>
+    <figcaption>Figure 9.local link failure <figcaption>
 </figure>
 
 ### Test Case 2: IGP remote link/node failure
 <figure align=center>
     <img src="images/testcase2.png" >
-    <figcaption>Figure 9. IGP remote link/node failure
+    <figcaption>Figure 10. IGP remote link/node failure
  <figcaption>
 </figure>
 
 ### Test Case 3: IGP remote PE failure
 <figure align=center>
     <img src="images/testcase3.png" >
-    <figcaption>Figure 10. IGP remote PE failure
+    <figcaption>Figure 11. IGP remote PE failure
  <figcaption>
 </figure>
 
 ### Test Case 4: BGP remote PE node failure
 <figure align=center>
     <img src="images/testcase4.png" >
-    <figcaption>Figure 11. BGP remote PE node failure
+    <figcaption>Figure 12. BGP remote PE node failure
  <figcaption>
 </figure>
 
 ### Test Case 5: Remote PE-CE link failure
 <figure align=center>
     <img src="images/testcase5.png" >
-    <figcaption>Figure 12. Remote PE-CE link failure
+    <figcaption>Figure 13. Remote PE-CE link failure
  <figcaption>
 </figure>
 
