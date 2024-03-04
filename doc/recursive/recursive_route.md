@@ -24,7 +24,7 @@
     - [Nexthop Group Preserving](#nexthop-group-preserving)
     - [Nexthop Dependency State](#nexthop-dependency-state)
     - [Segments of Nexthop Dependency](#segments-of-nexthop-dependency)
-  - [Data Plane Refresh for Recursive Route](#data-plane-refresh-for-recursive-route)
+  - [Dataplane Refresh for Recursive Route](#dataplane-refresh-for-recursive-route)
   - [FPM's New Schema for Recursive Nexthop Group](#fpms-new-schema-for-recursive-nexthop-group)
   - [Orchagent Changes](#orchagent-changes)
 - [Unit Test](#unit-test)
@@ -272,7 +272,7 @@ So a quick dataplane refresh operates as follows:
 
 3. The steps above immediately reflect the reachability status of ECMP paths and prevent packet loss, as Zebra simply needs to push the two NHGs (73, 74) into the dataplane for refreshing. Following this, Zebra proceeds with route convergence as usual. Inform protocol client, let protocol client decides if needs to redownload routes based on the changes on reachability and metrics. 
 
-### Data Plane Refresh for Recursive Route
+### Dataplane Refresh for Recursive Route
 Zebra only refreshes the NHG to the dataplane for a quick packet loss fix.
 
 ### FPM's New Schema for Recursive Nexthop Group
