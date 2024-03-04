@@ -257,13 +257,13 @@ As in the previous section, if NHGs can be preserved, the final status of the ne
 </figure>
 
 So a quick dataplane refresh operates as follows:
-1. find the current NHG 200.0.0.1, flatten its dependencies, and then use this to refresh the dataplane
+1. find the current NHG 200.0.0.1, flatten its dependencies, and then utilize it to refresh the dataplane
 <figure align=center>
     <img src="images/current_nhg_for_dataplane.png" >
     <figcaption>Figure 8. current NHG for dataplane refresh<figcaption>
 </figure>
 
-2. find the parent NHG of 200.0.0.1, flatten its dependencies, and then use this to refresh the dataplane
+2. Find the parent NHG of 200.0.0.1, associated with onlink NHG 2.2.2.2, flatten its dependencies, and then utilize it to refresh the dataplane
 <figure align=center>
     <img src="images/parent_nhg_for_dataplane.png" >
     <figcaption>Figure 9. parent NHG for dataplane refresh<figcaption>
