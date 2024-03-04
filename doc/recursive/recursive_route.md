@@ -23,7 +23,7 @@
     - [zebra\_rnh\_refresh\_depends()](#zebra_rnh_refresh_depends)
     - [Nexthop Group Preserving](#nexthop-group-preserving)
     - [Nexthop Dependency State](#nexthop-dependency-state)
-    - [Segments of Nexthop Dependency for Dplane Rrefresh](#segments-of-nexthop-dependency-for-dplane-rrefresh)
+    - [Segments of Nexthop Dependency](#segments-of-nexthop-dependency)
   - [Data Plane Refresh for Recursive Route](#data-plane-refresh-for-recursive-route)
   - [FPM's New Schema for Recursive Nexthop Group](#fpms-new-schema-for-recursive-nexthop-group)
   - [Orchagent Changes](#orchagent-changes)
@@ -257,7 +257,7 @@ As in the previous section, if NHGs can be preserved, the final status of the ne
     <figcaption>Figure 7. final status of the nexthop dependency of preserved NHG<figcaption>
 </figure>
 
-#### Segments of Nexthop Dependency for Dplane Rrefresh
+#### Segments of Nexthop Dependency
 So a quick dataplane refresh operates as follows:
 
 1. Find the current NHG 200.0.0.1, flatten its dependencies, and then utilize it to refresh the dataplane.
