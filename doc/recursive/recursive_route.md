@@ -23,7 +23,8 @@
     - [zebra\_rnh\_refresh\_depends()](#zebra_rnh_refresh_depends)
     - [Nexthop Group Preserving](#nexthop-group-preserving)
     - [Nexthop Dependency State](#nexthop-dependency-state)
-  - [Data Plane Refresh for Recursive Route](#data-plane-refresh-for-recursive-route)
+    - [Segments of Nexthop Dependency](#segments-of-nexthop-dependency)
+  - [Dataplane Refresh for Recursive Route](#dataplane-refresh-for-recursive-route)
   - [FPM's New Schema for Recursive Nexthop Group](#fpms-new-schema-for-recursive-nexthop-group)
   - [Orchagent Changes](#orchagent-changes)
 - [Unit Test](#unit-test)
@@ -132,7 +133,7 @@ Consider the case of recursive routes for EVPN underlay
       *                      via 10.1.0.27, Ethernet1, weight 1, 00:11:50
       *                      via 10.1.0.28, Ethernet1, weight 1, 00:11:50
 
-If the path 10.1.0.28 of prefix 200.0.0.0/24 is removed, Zebra will explicitly update both routes for recursive convergence with the help of the BGP client, one for 200.0.0.0/24 and another for 2.2.2.2/32. In this scenario, although the route 200.0.0.0/24 has one path removed, but its reachability for route 2.2.2.2/32 remains unchanged. To avoid packet loss, it's crucial to do a quick refresh of nexthops in data plane for the overlay routes before Zebra completes its route convergence process.
+If the path 10.1.0.28 of prefix 200.0.0.0/24 is removed, Zebra will explicitly update both routes for recursive convergence with the help of the BGP client, one for 200.0.0.0/24 and another for 2.2.2.2/32. In this scenario, although the route 200.0.0.0/24 has one path removed, but its reachability for route 2.2.2.2/32 remains unchanged. To avoid packet loss, it's crucial to do a quick refresh of nexthops in dataplane for the overlay routes before Zebra completes its route convergence process.
 
 <figure align=center>
     <img src="images/path_remove.png" >
@@ -181,7 +182,7 @@ done:
 
 #### zebra_rnh_refresh_depends()
 
-This newly added function is inserted into the existing route convergence process, enabling Zebra to refresh nexthops in the data plane before notifying the protocol client of route updates.
+This newly added function is inserted into the existing route convergence process, enabling Zebra to refresh nexthops in the dataplane before notifying the protocol client of route updates.
 
 <figure align=center>
     <img src="images/zebra_rnh_refresh_depends.png" >
@@ -231,7 +232,7 @@ Explanation of the functions above:
 
 1. rib_process() eventually calls zebra_rnh_eval_nexthop_entry() after finishing one route updating task
 2. If a tracked nexthop has resolution changed, zebra_rnh_refresh_depends() is invoked before the protocol client notification is sent
-3. zebra_rnh_refresh_depends() finds the corresponding nexthop group (nhe) and its parent nhe, and then push both of them to data plane for a quick refresh to avoid packet loss
+3. zebra_rnh_refresh_depends() finds the corresponding nexthop group (nhe) and its parent nhe, and then push both of them to dataplane for a quick refresh to avoid packet loss
 4. Zebra continues the client notify process, proceeding with the next round of recursive route iteration to refresh the resolution of nexthops to their final state
 
 #### Nexthop Group Preserving
@@ -243,7 +244,7 @@ As currently implemented, when Zebra adds or updates a route, it creates a new N
     <figcaption>Figure 6. nexthop changes when routes converge<figcaption>
 </figure>
 
-In order to facilitate a fast refresh by the data plane, the NHGs meeting the following conditions should be preserved:
+In order to facilitate a fast refresh by the dataplane, the NHGs meeting the following conditions should be preserved:
 - NHG of a singleton nexthop
 - NHG for a group of unchanged singleton nexthops
 
@@ -256,17 +257,23 @@ As in the previous section, if NHGs can be preserved, the final status of the ne
     <figcaption>Figure 7. final status of the nexthop dependency of preserved NHG<figcaption>
 </figure>
 
-So a quick data plane refresh operates as follows:
+#### Segments of Nexthop Dependency
+So a quick dataplane refresh operates as follows:
 
+1. Find the current NHG 200.0.0.1, flatten its dependencies, and then utilize it to refresh the dataplane.
 <figure align=center>
-    <img src="images/nhg_for_dataplane.png" >
-    <figcaption>Figure 8. NHG for data plane refresh<figcaption>
+    <img src="images/current_nhg_for_dataplane.png" >
 </figure>
 
-To immediately reflect the reachability status of ECMP paths and prevent packet loss, Zebra simply needs to push the two NHGs (73, 74) into the data plane. Following this, Zebra proceeds with route convergence as usual, leaving all dependent NHGs originating from NHG 90 untouched.
+2. Find the parent NHG of 200.0.0.1, which is associated with onlink NHG 2.2.2.2, flatten its dependencies, and then utilize it to refresh the dataplane.
+<figure align=center>
+    <img src="images/parent_nhg_for_dataplane.png" >
+</figure>
 
-### Data Plane Refresh for Recursive Route
-Zebra only refreshes the NHG to the data plane for a quick packet loss fix.
+3. The steps above immediately reflect the reachability status of ECMP paths and prevent packet loss, as Zebra simply needs to push the two NHGs (73, 74) into the dataplane for refreshing. Following this, Zebra proceeds with route convergence as usual. Inform protocol client, let protocol client decides if needs to redownload routes based on the changes on reachability and metrics. 
+
+### Dataplane Refresh for Recursive Route
+Zebra only refreshes the NHG to the dataplane for a quick packet loss fix.
 
 ### FPM's New Schema for Recursive Nexthop Group
 We rely on BRCM and NTT's changes.
@@ -279,34 +286,34 @@ We rely on BRCM and NTT's changes.
 ### Test Case 1: local link failure
 <figure align=center>
     <img src="images/testcase1.png" >
-    <figcaption>Figure 9.local link failure <figcaption>
+    <figcaption>Figure 8.local link failure <figcaption>
 </figure>
 
 ### Test Case 2: IGP remote link/node failure
 <figure align=center>
     <img src="images/testcase2.png" >
-    <figcaption>Figure 10. IGP remote link/node failure
+    <figcaption>Figure 9. IGP remote link/node failure
  <figcaption>
 </figure>
 
 ### Test Case 3: IGP remote PE failure
 <figure align=center>
     <img src="images/testcase3.png" >
-    <figcaption>Figure 11. IGP remote PE failure
+    <figcaption>Figure 10. IGP remote PE failure
  <figcaption>
 </figure>
 
 ### Test Case 4: BGP remote PE node failure
 <figure align=center>
     <img src="images/testcase4.png" >
-    <figcaption>Figure 12. BGP remote PE node failure
+    <figcaption>Figure 11. BGP remote PE node failure
  <figcaption>
 </figure>
 
 ### Test Case 5: Remote PE-CE link failure
 <figure align=center>
     <img src="images/testcase5.png" >
-    <figcaption>Figure 13. Remote PE-CE link failure
+    <figcaption>Figure 12. Remote PE-CE link failure
  <figcaption>
 </figure>
 
