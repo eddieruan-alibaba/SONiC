@@ -23,6 +23,7 @@
     - [zebra\_rnh\_refresh\_depends()](#zebra_rnh_refresh_depends)
     - [Nexthop Group Preserving](#nexthop-group-preserving)
     - [Nexthop Dependency State](#nexthop-dependency-state)
+    - [Segments of Nexthop Dependency for Dataplane Rrefresh](#segments-of-nexthop-dependency-for-dataplane-rrefresh)
   - [Data Plane Refresh for Recursive Route](#data-plane-refresh-for-recursive-route)
   - [FPM's New Schema for Recursive Nexthop Group](#fpms-new-schema-for-recursive-nexthop-group)
   - [Orchagent Changes](#orchagent-changes)
@@ -259,7 +260,7 @@ As in the previous section, if NHGs can be preserved, the final status of the ne
 #### Segments of Nexthop Dependency for Dataplane Rrefresh
 So a quick dataplane refresh operates as follows:
 
-1. find the current NHG 200.0.0.1, flatten its dependencies, and then utilize it to refresh the dataplane:
+1. Find the current NHG 200.0.0.1, flatten its dependencies, and then utilize it to refresh the dataplane:
 
 <figure align=center>
     <img src="images/current_nhg_for_dataplane.png" >
@@ -287,34 +288,34 @@ We rely on BRCM and NTT's changes.
 ### Test Case 1: local link failure
 <figure align=center>
     <img src="images/testcase1.png" >
-    <figcaption>Figure 9.local link failure <figcaption>
+    <figcaption>Figure 8.local link failure <figcaption>
 </figure>
 
 ### Test Case 2: IGP remote link/node failure
 <figure align=center>
     <img src="images/testcase2.png" >
-    <figcaption>Figure 11. IGP remote link/node failure
+    <figcaption>Figure 9. IGP remote link/node failure
  <figcaption>
 </figure>
 
 ### Test Case 3: IGP remote PE failure
 <figure align=center>
     <img src="images/testcase3.png" >
-    <figcaption>Figure 12. IGP remote PE failure
+    <figcaption>Figure 10. IGP remote PE failure
  <figcaption>
 </figure>
 
 ### Test Case 4: BGP remote PE node failure
 <figure align=center>
     <img src="images/testcase4.png" >
-    <figcaption>Figure 13. BGP remote PE node failure
+    <figcaption>Figure 11. BGP remote PE node failure
  <figcaption>
 </figure>
 
 ### Test Case 5: Remote PE-CE link failure
 <figure align=center>
     <img src="images/testcase5.png" >
-    <figcaption>Figure 14. Remote PE-CE link failure
+    <figcaption>Figure 12. Remote PE-CE link failure
  <figcaption>
 </figure>
 
