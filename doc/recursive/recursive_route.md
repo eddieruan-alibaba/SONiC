@@ -257,10 +257,16 @@ As in the previous section, if NHGs can be preserved, the final status of the ne
 </figure>
 
 So a quick data plane refresh operates as follows:
-
+1. find the current NHG 200.0.0.1, flatten its dependencies, and then use this to refresh the dataplane
 <figure align=center>
-    <img src="images/nhg_for_dataplane.png" >
-    <figcaption>Figure 8. NHG for data plane refresh<figcaption>
+    <img src="images/current_nhg_for_dataplane.png" >
+    <figcaption>Figure 8. current NHG for dataplane refresh<figcaption>
+</figure>
+
+2. find the parent NHG of 200.0.0.1, flatten its dependencies, and then use this to refresh the dataplane
+<figure align=center>
+    <img src="images/parent_nhg_for_dataplane.png" >
+    <figcaption>Figure 9. parent NHG for dataplane refresh<figcaption>
 </figure>
 
 To immediately reflect the reachability status of ECMP paths and prevent packet loss, Zebra simply needs to push the two NHGs (73, 74) into the data plane. Following this, Zebra proceeds with route convergence as usual, leaving all dependent NHGs originating from NHG 90 untouched.
@@ -285,28 +291,28 @@ We rely on BRCM and NTT's changes.
 ### Test Case 2: IGP remote link/node failure
 <figure align=center>
     <img src="images/testcase2.png" >
-    <figcaption>Figure 10. IGP remote link/node failure
+    <figcaption>Figure 11. IGP remote link/node failure
  <figcaption>
 </figure>
 
 ### Test Case 3: IGP remote PE failure
 <figure align=center>
     <img src="images/testcase3.png" >
-    <figcaption>Figure 11. IGP remote PE failure
+    <figcaption>Figure 12. IGP remote PE failure
  <figcaption>
 </figure>
 
 ### Test Case 4: BGP remote PE node failure
 <figure align=center>
     <img src="images/testcase4.png" >
-    <figcaption>Figure 12. BGP remote PE node failure
+    <figcaption>Figure 13. BGP remote PE node failure
  <figcaption>
 </figure>
 
 ### Test Case 5: Remote PE-CE link failure
 <figure align=center>
     <img src="images/testcase5.png" >
-    <figcaption>Figure 13. Remote PE-CE link failure
+    <figcaption>Figure 14. Remote PE-CE link failure
  <figcaption>
 </figure>
 
