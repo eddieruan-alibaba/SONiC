@@ -256,20 +256,22 @@ As in the previous section, if NHGs can be preserved, the final status of the ne
     <figcaption>Figure 7. final status of the nexthop dependency of preserved NHG<figcaption>
 </figure>
 
+#### Segments of Nexthop Dependency for Dataplane Rrefresh
 So a quick dataplane refresh operates as follows:
-1. find the current NHG 200.0.0.1, flatten its dependencies, and then utilize it to refresh the dataplane
+
+1. find the current NHG 200.0.0.1, flatten its dependencies, and then utilize it to refresh the dataplane:
+
 <figure align=center>
     <img src="images/current_nhg_for_dataplane.png" >
-    <figcaption>Figure 8. current NHG for dataplane refresh<figcaption>
 </figure>
 
-2. Find the parent NHG of 200.0.0.1, associated with onlink NHG 2.2.2.2, flatten its dependencies, and then utilize it to refresh the dataplane
+2. Find the parent NHG of 200.0.0.1, associated with onlink NHG 2.2.2.2, flatten its dependencies, and then utilize it to refresh the dataplane:
+
 <figure align=center>
     <img src="images/parent_nhg_for_dataplane.png" >
-    <figcaption>Figure 9. parent NHG for dataplane refresh<figcaption>
 </figure>
 
-To immediately reflect the reachability status of ECMP paths and prevent packet loss, Zebra simply needs to push the two NHGs (73, 74) into the dataplane. Following this, Zebra proceeds with route convergence as usual, leaving all dependent NHGs originating from NHG 90 untouched.
+3. To immediately reflect the reachability status of ECMP paths and prevent packet loss, Zebra simply needs to push the two NHGs (73, 74) into the dataplane. Following this, Zebra proceeds with route convergence as usual, leaving all dependent NHGs originating from NHG 90 untouched.
 
 ### Data Plane Refresh for Recursive Route
 Zebra only refreshes the NHG to the dataplane for a quick packet loss fix.
