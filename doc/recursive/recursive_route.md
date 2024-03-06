@@ -21,7 +21,7 @@
     - [Data Structure Modifications](#data-structure-modifications)
       - [struct rnh](#struct-rnh)
     - [zebra\_rnh\_refresh\_depends()](#zebra_rnh_refresh_depends)
-    - [Nexthop Group Preserving](#nexthop-group-preserving)
+    - [Nexthop Group Proposed Changes](#nexthop-group-proposed-changes)
     - [Nexthop Dependency State](#nexthop-dependency-state)
     - [Segments of Nexthop Dependency](#segments-of-nexthop-dependency)
   - [Dataplane Refresh for Recursive Route](#dataplane-refresh-for-recursive-route)
@@ -133,11 +133,11 @@ Consider the case of recursive routes for EVPN underlay
       *                      via 10.1.0.27, Ethernet1, weight 1, 00:11:50
       *                      via 10.1.0.28, Ethernet1, weight 1, 00:11:50
 
-If the path 10.1.0.28 of prefix 200.0.0.0/24 is removed, Zebra will explicitly update both routes for recursive convergence with the help of the BGP client, one for 200.0.0.0/24 and another for 2.2.2.2/32. In this scenario, although the route 200.0.0.0/24 has one path removed, but its reachability for route 2.2.2.2/32 remains unchanged. To avoid packet loss, it's crucial to do a quick refresh of nexthops in dataplane for the overlay routes before Zebra completes its route convergence process.
+If the path 10.1.0.28 of prefix 200.0.0.0/24 is removed, Zebra will explicitly update both routes for recursive convergence with the help of the BGP client, one for 200.0.0.0/24 and another for 2.2.2.2/32. In this scenario, although the route 200.0.0.0/24 has one path removed, but its reachability for route 2.2.2.2/32 remains unchanged. To avoid packet loss, it's crucial to do a quick refresh of nexthops in dataplane before Zebra completes its route convergence process. This approach would help underlay routes' traffic loss as well. No need to call out overlay routes explicitly.
 
 <figure align=center>
     <img src="images/path_remove.png" >
-    <figcaption>Figure 3. a path removed for recursive route<figcaption>
+    <figcaption>Figure 3. the path removed for recursive route<figcaption>
 </figure>
 
 #### Data Structure Modifications
@@ -219,61 +219,80 @@ static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
         copy_state(rnh, re, nrn);
         state_changed = 1;
     } else if (compare_state(re, rnh->state)) {
-        zebra_rnh_refresh_depends(rnh);        
+        zebra_rnh_refresh_depends(rnh, ...);        
         copy_state(rnh, re, nrn);
         state_changed = 1;
     }
     zebra_rnh_store_in_routing_table(rnh);
-    ...
+
+    if (state_changed || force) {
+        /* NOTE: Use the "copy" of resolving route stored in 'rnh' i.e.,
+        * rnh->state.
+        */
+        /* Notify registered protocol clients. */
+        zebra_rnh_notify_protocol_clients(zvrf, afi, nrn, rnh, prn,
+                              rnh->state);
+
+        /* Process pseudowires attached to this nexthop */
+        zebra_rnh_process_pseudowires(zvrf->vrf->vrf_id, rnh);
+    }
 }
 ```
 
-Explanation of the functions above:
-
+A brief explanation of the above process (with more detailed available in the subsequent sections):
 1. rib_process() eventually calls zebra_rnh_eval_nexthop_entry() after finishing one route updating task
-2. If a tracked nexthop has resolution changed, zebra_rnh_refresh_depends() is invoked before the protocol client notification is sent
-3. zebra_rnh_refresh_depends() finds the corresponding nexthop group (nhe) and its parent nhe, and then push both of them to dataplane for a quick refresh to avoid packet loss
-4. Zebra continues the client notify process, proceeding with the next round of recursive route iteration to refresh the resolution of nexthops to their final state
+2. If a tracked nexthop has resolved paths changed (as in the if else branch where compare_state() is located in the above code snippet), zebra_rnh_refresh_depends() will be invoked for the quick dataplane refresh before the protocol client notification is sent
+3. Zebra continues the client notify process, proceeding with the next round of recursive route iteration to refresh the resolution of nexthops to their final state
 
-#### Nexthop Group Preserving
+#### Nexthop Group Proposed Changes
 
 As currently implemented, when Zebra adds or updates a route, it creates a new Nexthop Group (NHG) for that route. So, in the process of the route convergence mentioned above, even if the reachability of the NHG (such as 200.0.0.1) hasn't changed, this NHG will be recreated during the convergence process. As shown in the diagram, when the path 10.0.1.28 is removed, all dependent NHGs originating from it will be recreated, as indicated by the red text in the diagram.
 
 <figure align=center>
     <img src="images/nhg_change.png" >
-    <figcaption>Figure 6. nexthop changes when routes converge<figcaption>
+    <figcaption>Figure 6. nexthop changes when routes converge in current FRR approach<figcaption>
 </figure>
 
-In order to facilitate a fast refresh by the dataplane, the NHGs meeting the following conditions should be preserved:
+In order to facilitate a quick refresh by the dataplane, the recursive NHGs meeting the following conditions should be preserved:
 - NHG of a singleton nexthop
 - NHG for a group of unchanged singleton nexthops
 
 #### Nexthop Dependency State
 
-As in the previous section, if NHGs can be preserved, the final status of the nexthop dependency is as follows:
+As in the previous section, due to the NHG proposed changes, the final status of the nexthop dependency is expected as follows:
 
 <figure align=center>
-    <img src="images/nhg_status.png" >
+    <img src="images/nhg_final_status.png" >
     <figcaption>Figure 7. final status of the nexthop dependency of preserved NHG<figcaption>
 </figure>
 
 #### Segments of Nexthop Dependency
-So a quick dataplane refresh operates as follows:
+Assuming BGP detects the node 10.0.1.28 is down, it sends a route update to Zebra with only two remaining paths. After Zebra updates this route, it reaches the state shown in Figure 7. Using this state as the starting point, the process for a quick dataplane refresh is as follows:
 
-1. Find the current NHG 200.0.0.1, flatten its dependencies, and then utilize it to refresh the dataplane.
+1. Zebra is informed the routes update of two paths for 200.0.0.0/24 (path 10.0.1.28 is removed), Zebra updates this route with new NHG 90 which has the two paths, then sends the route to dataplane. This is the current approach that Zebra used and it would recover all traffic for route 200.0.0.0/24 in hardware.
 <figure align=center>
     <img src="images/current_nhg_for_dataplane.png" >
 </figure>
 
-2. Find the parent NHG of 200.0.0.1, which is associated with onlink NHG 2.2.2.2, flatten its dependencies, and then utilize it to refresh the dataplane.
+2. Zebra iterates nht list of the route 200.0.0.0/24, then hands each rnh (as above NHG74 is found) in the list to zebra_rnh_refresh_depends().
 <figure align=center>
-    <img src="images/parent_nhg_for_dataplane.png" >
+    <img src="images/find_nhg_by_rnh.png" >
 </figure>
 
-3. The steps above immediately reflect the reachability status of ECMP paths and prevent packet loss, as Zebra simply needs to push the two NHGs (73, 74) into the dataplane for refreshing. Following this, Zebra proceeds with route convergence as usual. Inform protocol client, let protocol client decides if needs to redownload routes based on the changes on reachability and metrics. 
+3. Afterwards, zebra_rnh_refresh_depends() utilizes the rnh to locate the corresponding NHG, and proceeds with a two-step dataplane quick refresh based on the dependency relationships stored in NHG 74.
+- step a, get NHG 75 by "nhg_depends" field in struct nhg_hash_entry, replaces its path with NHG 90's, then make a quick refresh to dataplane for NHG 75
+- step b, get NHG 73 by using "nhg_dependents" field in struct nhg_hash_entry, then make a quick refresh to dataplane for NHG 73. There is no need to update NHG 73's path again, since these NHGs have unchanged dependencies in the current state, NHG 73 has five paths updated after the previous step
+
+The steps above immediately reflect the reachability status of ECMP paths and prevent packet loss, as Zebra just needs to refresh the two NHGs 73, 75 into the dataplane.
+<figure align=center>
+    <img src="images/nhg_depend_update.png" >
+</figure>
+
+4. When zebra_rnh_refresh_depends() is done, Zebra continues its original processing，calling zebra_rnh_notify_protocol_clients() to inform BGP that 200.0.0.1 as nexthop is changed.
+5. BGP triggers 2.2.2.2 and other routes updates which via 200.0.0.1. During 2.2.2.2's Zebra route handling, it may go back to step 2 for 2.2.2.2's rnh list if it is not empty. For these steps, Zebra proceeds with route convergence as usual, inform protocol client, let protocol client decides if needs to update routes based on the changes on reachability and metrics. 
 
 ### Dataplane Refresh for Recursive Route
-Zebra only refreshes the NHG to the dataplane for a quick packet loss fix.
+Zebra only refreshes the NHGs to the dataplane for a quick packet loss fix.
 
 ### FPM's New Schema for Recursive Nexthop Group
 We rely on BRCM and NTT's changes.
