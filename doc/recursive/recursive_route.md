@@ -241,7 +241,7 @@ static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
 
 A brief explanation of the above process (with more detailed available in the subsequent sections):
 1. rib_process() eventually calls zebra_rnh_eval_nexthop_entry() after finishing one route updating task
-2. If a tracked nexthop has resolved paths changed (as in the if else branch where compare_state() is located in the above code snippet), zebra_rnh_refresh_depends() will be invoked for the quick dataplane refresh before the protocol client notification is sent
+2. If a tracked nexthop has resolved paths changed (as in the if else branch where compare_state() is located in the above code snippet), zebra_rnh_refresh_depends() will be invoked for the quick dataplane fixup which might stop traffic loss via removing failed path before the protocol client notification is sent
 3. Zebra continues the client notify process, proceeding with the next round of recursive route iteration to refresh the resolution of nexthops to their final state
 
 #### Nexthop Group Proposed Changes
