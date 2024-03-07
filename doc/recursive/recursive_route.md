@@ -130,8 +130,7 @@ If the path 10.1.0.28 of prefix 200.0.0.0/24 is removed, Zebra will explicitly u
     <figcaption>Figure 3. the path removed for recursive route<figcaption>
 </figure>
 
-#### Data Structure Modifications
-##### struct rnh
+#### Nexthop ID Change
 zebra_rib_evaluate_rn_nexthops() triggers routes updating through nexthop backwalk. Without the assistance of protocol clients, a method needs to be introduced for looking up nexthop hash struct (nhe) based on the prefix of the NHT list. e.g. Finding the nhe based on the prefix 200.0.0.1.
 
 A new field nhe_id is added for this purpose.
