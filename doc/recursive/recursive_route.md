@@ -8,7 +8,7 @@
 
 <!-- omit in toc -->
 ## Table of Content
-- [Scope](#scope)
+- [Goal](#goal)
 - [Requirements Overview](#requirements-overview)
 - [Zebra Current Approach for Recursive Routes](#zebra-current-approach-for-recursive-routes)
   - [Data Structure for Recursive Handling](#data-structure-for-recursive-handling)
