@@ -175,7 +175,7 @@ done:
 This newly added function is inserted into the existing route convergence process, enabling Zebra to refresh nexthops in the dataplane before notifying the protocol client of route updates.
 
 <figure align=center>
-    <img src="images/zebra_rnh_fixup_depends" >
+    <img src="images/zebra_rnh_fixup_depends.png" >
     <figcaption>Figure 5. zebra_rnh_fixup_depends()<figcaption>
 </figure>
 
