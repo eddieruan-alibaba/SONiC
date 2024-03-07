@@ -20,7 +20,7 @@
   - [Nexthop Fixup Handling](#nexthop-fixup-handling)
     - [Data Structure Modifications](#data-structure-modifications)
       - [struct rnh](#struct-rnh)
-    - [zebra\_rnh\_refresh\_depends()](#zebra_rnh_refresh_depends)
+    - [zebra\_rnh\_fixup\_depends()](#zebra_rnh_fixup_depends)
     - [Nexthop Group Proposed Changes](#nexthop-group-proposed-changes)
     - [Nexthop Dependency State](#nexthop-dependency-state)
     - [Segments of Nexthop Dependency](#segments-of-nexthop-dependency)
@@ -170,7 +170,7 @@ done:
 }
 ```
 
-#### zebra_rnh_refresh_depends()
+#### zebra_rnh_fixup_depends()
 
 This newly added function is inserted into the existing route convergence process, enabling Zebra to refresh nexthops in the dataplane before notifying the protocol client of route updates.
 
