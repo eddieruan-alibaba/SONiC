@@ -174,7 +174,7 @@ This newly added function is inserted into the existing route convergence proces
 
 The function in the blue serves a quick nexthop refreshing. It runs before the protocol client's notification for route updating.
 
-zebra_rnh_fixup_depends() is called as follows:
+zebra_rnh_fixup_depends() is called as follows
 
 ``` c
 static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
@@ -189,10 +189,6 @@ static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
         if (prn)
             prefix_copy(&rnh->resolved_route, &prn->p);
         else {
-                /*
-                * Just quickly store the family of the resolved
-                * route so that we can reset it in a second here
-                */
                 int family = rnh->resolved_route.family;
 
                 memset(&rnh->resolved_route, 0, sizeof(struct prefix));
@@ -202,21 +198,17 @@ static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
         copy_state(rnh, re, nrn);
         state_changed = 1;
     } else if (compare_state(re, rnh->state)) {
-        zebra_rnh_fixup_depends(rnh, ...);        
         copy_state(rnh, re, nrn);
         state_changed = 1;
     }
     zebra_rnh_store_in_routing_table(rnh);
 
     if (state_changed || force) {
-        /* NOTE: Use the "copy" of resolving route stored in 'rnh' i.e.,
-        * rnh->state.
-        */
-        /* Notify registered protocol clients. */
+        /* New added for dataplane quick refresh */
+        zebra_rnh_fixup_depends(rnh);
+
         zebra_rnh_notify_protocol_clients(zvrf, afi, nrn, rnh, prn,
                               rnh->state);
-
-        /* Process pseudowires attached to this nexthop */
         zebra_rnh_process_pseudowires(zvrf->vrf->vrf_id, rnh);
     }
 }
