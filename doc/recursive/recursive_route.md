@@ -23,7 +23,6 @@
     - [Nexthop Group Proposed Changes](#nexthop-group-proposed-changes)
     - [Nexthop Dependency State](#nexthop-dependency-state)
     - [Segments of Nexthop Dependency](#segments-of-nexthop-dependency)
-  - [Dataplane Refresh for Recursive Route](#dataplane-refresh-for-recursive-route)
   - [FPM's New Schema for Recursive Nexthop Group](#fpms-new-schema-for-recursive-nexthop-group)
   - [Orchagent Changes](#orchagent-changes)
 - [Unit Test](#unit-test)
