@@ -175,13 +175,13 @@ done:
 This newly added function is inserted into the existing route convergence process, enabling Zebra to refresh nexthops in the dataplane before notifying the protocol client of route updates.
 
 <figure align=center>
-    <img src="images/zebra_rnh_refresh_depends.png" >
-    <figcaption>Figure 5. zebra_rnh_refresh_depends()<figcaption>
+    <img src="images/zebra_rnh_fixup_depends" >
+    <figcaption>Figure 5. zebra_rnh_fixup_depends()<figcaption>
 </figure>
 
 The function in the blue serves a quick nexthop refreshing. It runs before the protocol client's notification for route updating.
 
-zebra_rnh_refresh_depends() is called as follows:
+zebra_rnh_fixup_depends() is called as follows:
 
 ``` c
 static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
@@ -209,7 +209,7 @@ static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
         copy_state(rnh, re, nrn);
         state_changed = 1;
     } else if (compare_state(re, rnh->state)) {
-        zebra_rnh_refresh_depends(rnh, ...);        
+        zebra_rnh_fixup_depends(rnh, ...);        
         copy_state(rnh, re, nrn);
         state_changed = 1;
     }
@@ -231,7 +231,7 @@ static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
 
 A brief explanation of the above process (with more detailed available in the subsequent sections):
 1. rib_process() eventually calls zebra_rnh_eval_nexthop_entry() after finishing one route updating task
-2. If a tracked nexthop has resolved paths changed (as in the if else branch where compare_state() is located in the above code snippet), zebra_rnh_refresh_depends() will be invoked for the quick dataplane fixup which might stop traffic loss via removing failed path before the protocol client notification is sent
+2. If a tracked nexthop has resolved paths changed (as in the if else branch where compare_state() is located in the above code snippet), zebra_rnh_fixup_depends() will be invoked for the quick dataplane fixup which might stop traffic loss via removing failed path before the protocol client notification is sent
 3. Zebra continues the client notify process, proceeding with the next round of recursive route iteration to refresh the resolution of nexthops to their final state
 
 #### Nexthop Group Proposed Changes
@@ -264,12 +264,12 @@ Assuming BGP detects the node 10.0.1.28 is down, it sends a route update to Zebr
     <img src="images/current_nhg_for_dataplane.png" >
 </figure>
 
-2. Zebra iterates nht list of the route 200.0.0.0/24, then hands each rnh (as above NHG74 is found) in the list to zebra_rnh_refresh_depends().
+2. Zebra iterates nht list of the route 200.0.0.0/24, then hands each rnh (as above NHG74 is found) in the list to zebra_rnh_fixup_depends().
 <figure align=center>
     <img src="images/find_nhg_by_rnh.png" >
 </figure>
 
-3. Afterwards, zebra_rnh_refresh_depends() utilizes the rnh to locate the corresponding NHG, and proceeds with a two-step dataplane quick refresh based on the dependency relationships stored in NHG 74.
+3. Afterwards, zebra_rnh_fixup_depends() utilizes the rnh to locate the corresponding NHG, and proceeds with a two-step dataplane quick refresh based on the dependency relationships stored in NHG 74.
 - step a, get NHG 75 by "nhg_depends" field in struct nhg_hash_entry, replaces its path with NHG 90's, then make a quick refresh to dataplane for NHG 75
 - step b, get NHG 73 by using "nhg_dependents" field in struct nhg_hash_entry, then make a quick refresh to dataplane for NHG 73. There is no need to update NHG 73's path again, since these NHGs have unchanged dependencies in the current state, NHG 73 has five paths updated after the previous step
 
@@ -278,7 +278,7 @@ The steps above immediately reflect the reachability status of ECMP paths and pr
     <img src="images/nhg_depend_update.png" >
 </figure>
 
-4. When zebra_rnh_refresh_depends() is done, Zebra continues its original processing，calling zebra_rnh_notify_protocol_clients() to inform BGP that 200.0.0.1 as nexthop is changed.
+4. When zebra_rnh_fixup_depends() is done, Zebra continues its original processing，calling zebra_rnh_notify_protocol_clients() to inform BGP that 200.0.0.1 as nexthop is changed.
 5. BGP triggers 2.2.2.2 and other routes updates which via 200.0.0.1. During 2.2.2.2's Zebra route handling, it may go back to step 2 for 2.2.2.2's rnh list if it is not empty. For these steps, Zebra proceeds with route convergence as usual, inform protocol client, let protocol client decides if needs to update routes based on the changes on reachability and metrics. 
 
 ### Dataplane Refresh for Recursive Route
