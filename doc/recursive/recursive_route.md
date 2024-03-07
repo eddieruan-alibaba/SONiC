@@ -144,6 +144,24 @@ uint32_t nexthop_group_hash(const struct nexthop_group *nhg)
     return key;
 }
 ```
+To facilitate the handling of nexthop fixup, it is necessary to keep it unchanged during the recursive nexthop convergence process. Therefore, we consider not using the resolved nexthop as one of the conditions for generating the hash key. Instead, we will use the following API for generating the hash key.
+
+``` c
+uint32_t nexthop_group_hash_no_recurse(const struct nexthop_group *nhg)
+{
+	struct nexthop *nh;
+	uint32_t key = 0;
+
+	/*
+	 * We are not interested in hashing over any recursively
+	 * resolved nexthops
+	 */
+	for (nh = nhg->nexthop; nh; nh = nh->next)
+		key = jhash_1word(nexthop_hash(nh), key);
+
+	return key;
+}
+```
 
 #### zebra_rnh_fixup_depends()
 
