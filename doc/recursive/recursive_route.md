@@ -266,9 +266,6 @@ The steps above immediately reflect the reachability status of ECMP paths and pr
 4. When zebra_rnh_fixup_depends() is done, Zebra continues its original processing，calling zebra_rnh_notify_protocol_clients() to inform BGP that 200.0.0.1 as nexthop is changed.
 5. BGP triggers 2.2.2.2 and other routes updates which via 200.0.0.1. During 2.2.2.2's Zebra route handling, it may go back to step 2 for 2.2.2.2's rnh list if it is not empty. For these steps, Zebra proceeds with route convergence as usual, inform protocol client, let protocol client decides if needs to update routes based on the changes on reachability and metrics. 
 
-### Dataplane Refresh for Recursive Route
-Zebra only refreshes the NHGs to the dataplane for a quick packet loss fix.
-
 ### FPM's New Schema for Recursive Nexthop Group
 We rely on BRCM and NTT's changes.
 
