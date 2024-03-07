@@ -18,8 +18,7 @@
 - [High Level Design](#high-level-design)
   - [Triggers Events for Recursive Handling](#triggers-events-for-recursive-handling)
   - [Nexthop Fixup Handling](#nexthop-fixup-handling)
-    - [Data Structure Modifications](#data-structure-modifications)
-      - [struct rnh](#struct-rnh)
+    - [Nexthop ID Change](#nexthop-id-change)
     - [zebra\_rnh\_fixup\_depends()](#zebra_rnh_fixup_depends)
     - [Nexthop Group Proposed Changes](#nexthop-group-proposed-changes)
     - [Nexthop Dependency State](#nexthop-dependency-state)
@@ -131,41 +130,18 @@ If the path 10.1.0.28 of prefix 200.0.0.0/24 is removed, Zebra will explicitly u
 </figure>
 
 #### Nexthop ID Change
-zebra_rib_evaluate_rn_nexthops() triggers routes updating through nexthop backwalk. Without the assistance of protocol clients, a method needs to be introduced for looking up nexthop hash struct (nhe) based on the prefix of the NHT list. e.g. Finding the nhe based on the prefix 200.0.0.1.
+When Zebra creates a hash entry for the NHG, it uses the IP of the nexthop and its resolved nexthop as the conditions for calculating the hash key. Therefore, every time a new nexthop is registered with Zebra, it creates a new entry, even if a corresponding hash entry already exists. As a result, the nexthop ID will also change.
 
-A new field nhe_id is added for this purpose.
-
-    struct rnh {
-        ...
-
-        /* nhe id currently associated */
-        uint32_t nhe_id;
-
-        ...
-    }
-
-This field provides information about which nhe is associated with the NHT prefix.
-
-nhg_id_rnh_add() is used to set this field and it is invoked each time a new singleton nhe is created in zebra_nhe_find().
 ``` c
-static void nhg_id_rnh_add(struct nhg_hash_entry *nhe)
-```
-``` c
-static bool zebra_nhe_find(struct nhg_hash_entry **nhe, /* return value */
-               struct nhg_hash_entry *lookup,
-               struct nhg_connected_tree_head *nhg_depends,
-               afi_t afi, bool from_dplane)
+uint32_t nexthop_group_hash(const struct nexthop_group *nhg)
 {
-    ...
+    struct nexthop *nh;
+    uint32_t key = 0;
 
-done:
-    /* Reset time since last update */
-    (*nhe)->uptime = monotime(NULL);
+    for (ALL_NEXTHOPS_PTR(nhg, nh))
+        key = jhash_1word(nexthop_hash(nh), key);
 
-    if (created)
-        nhg_id_rnh_add(*nhe);
-
-    return created;
+    return key;
 }
 ```
 
