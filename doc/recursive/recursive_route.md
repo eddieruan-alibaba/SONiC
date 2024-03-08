@@ -253,11 +253,9 @@ A quick dataplane refresh begins with this state as the starting point:
 4. When zebra_rnh_fixup_depends() is done, Zebra continues its original processing，calling zebra_rnh_notify_protocol_clients() to inform BGP that 200.0.0.1 as nexthop is changed.
 5. BGP triggers 2.2.2.2 and other routes updates which via 200.0.0.1. During 2.2.2.2's Zebra route handling, it may go back to step 2 for 2.2.2.2's rnh list if it is not empty.
 
-### FPM's New Schema for Recursive Nexthop Group
-We rely on BRCM and NTT's changes.
-
-### Orchagent Changes
-We rely on BRCM and NTT's changes.
+### FPM and Orchagent Changes
+Fpm needs to add a new schema to take each member as nexthop group ID and update APP DB. (Rely on BRCM and NTT's changes)
+Orchagent picks up event from APP DB and trigger nexthop group programming. Neighorch needs to handle this new schema without change too much on existing codes. (Rely on BRCM and NTT's changes)
 
 ## Unit Test
 ### Normal Case's Forwarding Chain Information
