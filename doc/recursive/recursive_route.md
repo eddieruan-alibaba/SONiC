@@ -231,12 +231,6 @@ When BGP detects the node 10.0.1.28 is down, it sends a route update to Zebra wi
 
 1. Zebra updates this route with new NHG 90 which has the two paths, then sends the route to dataplane. This is the current approach that Zebra used and it would recover all traffic for route 200.0.0.0/24 in hardware.
 
-
-
-
-Assuming BGP detects the node 10.0.1.28 is down, it sends a route update to Zebra with only two remaining paths. After Zebra updates this route, it reaches the state shown in Figure 7. Using this state as the starting point, the process for a quick dataplane refresh is as follows:
-
-1. Zebra is informed the routes update of two paths for 200.0.0.0/24 (path 10.0.1.28 is removed), Zebra updates this route with new NHG 90 which has the two paths, then sends the route to dataplane. This is the current approach that Zebra used and it would recover all traffic for route 200.0.0.0/24 in hardware.
 <figure align=center>
     <img src="images/current_nhg_for_dataplane.png" >
 </figure>
