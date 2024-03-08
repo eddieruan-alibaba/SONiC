@@ -229,18 +229,11 @@ Assuming the initial state of EVPN underlay routes is as follows:
 
 When BGP detects the node 10.0.1.28 is down, it sends a route update to Zebra with only two remaining paths. After Zebra updates this route, it reaches the state shown in Figure 7. Using this state as the starting point, the process for a quick dataplane refresh is as follows:
 
-Zebra is informed the routes update of two paths for 200.0.0.0/24 (path 10.0.1.28 is removed), Zebra updates this route with new NHG 90 which has the two paths, then sends the route to dataplane. This is the current approach that Zebra used and it would recover all traffic for route 200.0.0.0/24 in hardware.
+1. Zebra updates this route with new NHG 90 which has the two paths, then sends the route to dataplane. This is the current approach that Zebra used and it would recover all traffic for route 200.0.0.0/24 in hardware.
 
-#### Nexthop Dependency State
 
-As in the previous section, due to the NHG proposed changes, the final status of the nexthop dependency is expected as follows:
 
-<figure align=center>
-    <img src="images/nhg_final_status.png" >
-    <figcaption>Figure 7. final status of the routes<figcaption>
-</figure>
 
-#### Segments of Nexthop Dependency
 Assuming BGP detects the node 10.0.1.28 is down, it sends a route update to Zebra with only two remaining paths. After Zebra updates this route, it reaches the state shown in Figure 7. Using this state as the starting point, the process for a quick dataplane refresh is as follows:
 
 1. Zebra is informed the routes update of two paths for 200.0.0.0/24 (path 10.0.1.28 is removed), Zebra updates this route with new NHG 90 which has the two paths, then sends the route to dataplane. This is the current approach that Zebra used and it would recover all traffic for route 200.0.0.0/24 in hardware.
@@ -264,6 +257,13 @@ The steps above immediately reflect the reachability status of ECMP paths and pr
 
 4. When zebra_rnh_fixup_depends() is done, Zebra continues its original processing，calling zebra_rnh_notify_protocol_clients() to inform BGP that 200.0.0.1 as nexthop is changed.
 5. BGP triggers 2.2.2.2 and other routes updates which via 200.0.0.1. During 2.2.2.2's Zebra route handling, it may go back to step 2 for 2.2.2.2's rnh list if it is not empty. For these steps, Zebra proceeds with route convergence as usual, inform protocol client, let protocol client decides if needs to update routes based on the changes on reachability and metrics. 
+
+As in the previous section, due to the NHG proposed changes, the final status of the nexthop dependency is expected as follows:
+
+<figure align=center>
+    <img src="images/nhg_final_status.png" >
+    <figcaption>Figure 7. final status of the routes<figcaption>
+</figure>
 
 ### FPM's New Schema for Recursive Nexthop Group
 We rely on BRCM and NTT's changes.
