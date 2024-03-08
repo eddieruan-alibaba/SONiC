@@ -223,7 +223,7 @@ A brief explanation of the above process (with more detailed available in the su
 Assuming the initial state of EVPN underlay routes is as follows:
 
 <figure align=center>
-    <img src="images/nhg_change.png" >
+    <img src="images/nhg_initial_state.png" >
     <figcaption>Figure 6. initial state of routes<figcaption>
 </figure>
 
