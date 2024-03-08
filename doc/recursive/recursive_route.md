@@ -244,14 +244,14 @@ A quick dataplane refresh begins with this state as the starting point:
     <img src="images/find_nhg_by_rnh.png" >
 </figure>
 
-3. zebra_rnh_fixup_depends() utilizes the rnh to locate the corresponding NHG 74, then by using "nhg_dependents" field in struct nhg_hash_entry, make a quick refresh to dataplane of NHH 73 which has five paths.
+3. zebra_rnh_fixup_depends() utilizes the rnh to locate the corresponding NHG 74, then by using the "nhg_dependents" field in the struct nhg_hash_entry, it performs a quick refresh to the dataplane of NHH 73, which has five paths. It will immediately reflect the reachability status of ECMP paths and prevent packet loss, as Zebra just needs to refresh the two NHGs 73, 75 into the dataplane.
 
-The steps above immediately reflect the reachability status of ECMP paths and prevent packet loss, as Zebra just needs to refresh the two NHGs 73, 75 into the dataplane.
 <figure align=center>
     <img src="images/nhg_depend_update.png" >
 </figure>
 
 4. When zebra_rnh_fixup_depends() is done, Zebra continues its original processing，calling zebra_rnh_notify_protocol_clients() to inform BGP that 200.0.0.1 as nexthop is changed.
+
 5. BGP triggers 2.2.2.2 and other routes updates which via 200.0.0.1. During 2.2.2.2's Zebra route handling, it may go back to step 2 for 2.2.2.2's rnh list if it is not empty.
 
 ### FPM's New Schema for Recursive Nexthop Group
