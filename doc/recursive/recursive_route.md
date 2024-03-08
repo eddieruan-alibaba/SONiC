@@ -231,9 +231,6 @@ When BGP detects the node 10.0.1.28 is down, it sends a route update to Zebra wi
 
 Zebra is informed the routes update of two paths for 200.0.0.0/24 (path 10.0.1.28 is removed), Zebra updates this route with new NHG 90 which has the two paths, then sends the route to dataplane. This is the current approach that Zebra used and it would recover all traffic for route 200.0.0.0/24 in hardware.
 
-
-As currently implemented, when Zebra adds or updates a route, it creates a new Nexthop Group (NHG) for that route. So, in the process of the route convergence mentioned above, even if the reachability of the NHG (such as 200.0.0.1) hasn't changed, this NHG will be recreated during the convergence process. As shown in the diagram, when the path 10.0.1.28 is removed, all dependent NHGs originating from it will be recreated, as indicated by the red text in the diagram.
-
 #### Nexthop Dependency State
 
 As in the previous section, due to the NHG proposed changes, the final status of the nexthop dependency is expected as follows:
