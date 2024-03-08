@@ -251,7 +251,6 @@ A quick dataplane refresh begins with this state as the starting point:
 </figure>
 
 4. When zebra_rnh_fixup_depends() is done, Zebra continues its original processing，calling zebra_rnh_notify_protocol_clients() to inform BGP that 200.0.0.1 as nexthop is changed.
-
 5. BGP triggers 2.2.2.2 and other routes updates which via 200.0.0.1. During 2.2.2.2's Zebra route handling, it may go back to step 2 for 2.2.2.2's rnh list if it is not empty.
 
 ### FPM's New Schema for Recursive Nexthop Group
