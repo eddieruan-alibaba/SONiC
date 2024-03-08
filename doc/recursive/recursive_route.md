@@ -220,18 +220,18 @@ A brief explanation of the above process (with more detailed available in the su
 
 #### Nexthop Group Proposed Changes
 
-Assuming the initial state of EVPN underlay routes is as follows:
+Assuming the initial state of EVPN underlay routes is as follows
 
 <figure align=center>
     <img src="images/nhg_initial_state.png" >
     <figcaption>Figure 6. initial state of the routes<figcaption>
 </figure>
 
-When BGP detects the node 10.0.1.28 is down, it sends a route update to Zebra with only two remaining paths. After Zebra updates this route, it reaches the state shown in Figure 7. Using this state as the starting point, the process for a quick dataplane refresh is as follows:
+When BGP detects the node 10.0.1.28 is down, it sends a route update to Zebra with only two remaining paths. After Zebra updates this route, it reaches the state shown in Figure 7. Using this state as the starting point, the process for a quick dataplane refresh is as follows
 
 <figure align=center>
-    <img src="images/nhg_final_status.png" >
-    <figcaption>Figure 7. final status of the routes<figcaption>
+    <img src="images/nhg_removed_state.png" >
+    <figcaption>Figure 7. one path removed state of the routes<figcaption>
 </figure>
 
 1. Zebra updates this route with new NHG 90 which has the two paths, then sends the route to dataplane. This is the current approach that Zebra used and it would recover all traffic for route 200.0.0.0/24 in hardware.
