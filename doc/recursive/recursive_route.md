@@ -21,8 +21,6 @@
     - [Nexthop ID Change](#nexthop-id-change)
     - [zebra\_rnh\_fixup\_depends()](#zebra_rnh_fixup_depends)
     - [Nexthop Group Proposed Changes](#nexthop-group-proposed-changes)
-    - [Nexthop Dependency State](#nexthop-dependency-state)
-    - [Segments of Nexthop Dependency](#segments-of-nexthop-dependency)
   - [FPM's New Schema for Recursive Nexthop Group](#fpms-new-schema-for-recursive-nexthop-group)
   - [Orchagent Changes](#orchagent-changes)
 - [Unit Test](#unit-test)
