@@ -224,7 +224,7 @@ Assuming the initial state of EVPN underlay routes is as follows:
 
 <figure align=center>
     <img src="images/nhg_initial_state.png" >
-    <figcaption>Figure 6. initial state of routes<figcaption>
+    <figcaption>Figure 6. initial state of the routes<figcaption>
 </figure>
 
 When BGP detects the node 10.0.1.28 is down, it sends a route update to Zebra with only two remaining paths. After Zebra updates this route, it reaches the state shown in Figure 7. Using this state as the starting point, the process for a quick dataplane refresh is as follows:
@@ -240,7 +240,7 @@ As in the previous section, due to the NHG proposed changes, the final status of
 
 <figure align=center>
     <img src="images/nhg_final_status.png" >
-    <figcaption>Figure 7. final status of the nexthop dependency of preserved NHG<figcaption>
+    <figcaption>Figure 7. final status of the routes<figcaption>
 </figure>
 
 #### Segments of Nexthop Dependency
