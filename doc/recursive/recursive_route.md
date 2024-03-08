@@ -234,11 +234,6 @@ Zebra is informed the routes update of two paths for 200.0.0.0/24 (path 10.0.1.2
 
 As currently implemented, when Zebra adds or updates a route, it creates a new Nexthop Group (NHG) for that route. So, in the process of the route convergence mentioned above, even if the reachability of the NHG (such as 200.0.0.1) hasn't changed, this NHG will be recreated during the convergence process. As shown in the diagram, when the path 10.0.1.28 is removed, all dependent NHGs originating from it will be recreated, as indicated by the red text in the diagram.
 
-
-In order to facilitate a quick refresh by the dataplane, the recursive NHGs meeting the following conditions should be preserved:
-- NHG of a singleton nexthop
-- NHG for a group of unchanged singleton nexthops
-
 #### Nexthop Dependency State
 
 As in the previous section, due to the NHG proposed changes, the final status of the nexthop dependency is expected as follows:
