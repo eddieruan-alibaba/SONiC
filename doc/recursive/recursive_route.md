@@ -238,7 +238,7 @@ A quick dataplane refresh begins with this state as the starting point:
 1. Zebra updates this route with new NHG 90 which has the two paths, then sends the route to dataplane. This is the current approach and it would recover all traffic for route 200.0.0.0/24 in hardware.
 
 <figure align=center>
-    <img src="images/current_nhg_for_dataplane.png" >
+    <img src="images/nhg_for_dataplane.png" >
 </figure>
 
 2. Zebra iterates nht list of the route 200.0.0.0/24, then hands each rnh (NHG74 is found in this case) in the list to zebra_rnh_fixup_depends().
