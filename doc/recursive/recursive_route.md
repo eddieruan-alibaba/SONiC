@@ -143,7 +143,7 @@ uint32_t nexthop_group_hash(const struct nexthop_group *nhg)
     return key;
 }
 ```
-To facilitate the handling of nexthop fixup, it is necessary to keep it unchanged during the recursive nexthop convergence process. Therefore, we consider not using the resolved nexthop as one of the conditions for generating the hash key. Instead, we will use the following API for generating the hash key.
+To facilitate the handling of nexthop fixup, it is necessary to keep it unchanged during the recursive nexthop convergence process. Therefore, we consider using the direct IP address of the nexthop instead of resolved nexthop as one of the conditions for generating the hash key.
 
 ``` c
 uint32_t nexthop_group_hash_no_recurse(const struct nexthop_group *nhg)
