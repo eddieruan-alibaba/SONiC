@@ -224,7 +224,7 @@ Assuming the initial state of EVPN underlay routes is as follows:
 
 <figure align=center>
     <img src="images/nhg_change.png" >
-    <figcaption>Figure 6. nexthop changes when routes converge in current FRR approach<figcaption>
+    <figcaption>Figure 6. initial state of routes<figcaption>
 </figure>
 
 When BGP detects the node 10.0.1.28 is down, it sends a route update to Zebra with only two remaining paths. After Zebra updates this route, it reaches the state shown in Figure 7. Using this state as the starting point, the process for a quick dataplane refresh is as follows:
