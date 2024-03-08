@@ -227,20 +227,22 @@ Assuming the initial state of EVPN underlay routes is as follows
     <figcaption>Figure 6. initial state of the routes<figcaption>
 </figure>
 
-When BGP detects the node 10.0.1.28 is down, it sends a route update to Zebra with only two remaining paths. After Zebra updates this route, it reaches the state shown in Figure 7. Using this state as the starting point, the process for a quick dataplane refresh is as follows
+When BGP detects the node 10.0.1.28 is down, it sends a route update to Zebra with only two remaining paths. After Zebra updates this route, it reaches the state shown in Figure 7.
+
+A quick dataplane refresh begins with this state as the starting point.
 
 <figure align=center>
     <img src="images/nhg_removed_state.png" >
     <figcaption>Figure 7. one path removed state of the routes<figcaption>
 </figure>
 
-1. Zebra updates this route with new NHG 90 which has the two paths, then sends the route to dataplane. This is the current approach that Zebra used and it would recover all traffic for route 200.0.0.0/24 in hardware.
+1. Zebra updates this route with new NHG 90 which has the two paths, then sends the route to dataplane. This is the current approach and it would recover all traffic for route 200.0.0.0/24 in hardware.
 
 <figure align=center>
     <img src="images/current_nhg_for_dataplane.png" >
 </figure>
 
-2. Zebra iterates nht list of the route 200.0.0.0/24, then hands each rnh (as above NHG74 is found) in the list to zebra_rnh_fixup_depends().
+2. Zebra iterates nht list of the route 200.0.0.0/24, then hands each rnh (NHG74 is found in this case) in the list to zebra_rnh_fixup_depends().
 <figure align=center>
     <img src="images/find_nhg_by_rnh.png" >
 </figure>
