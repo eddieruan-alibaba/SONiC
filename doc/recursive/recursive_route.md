@@ -18,7 +18,7 @@
 - [High Level Design](#high-level-design)
   - [Triggers Events for Recursive Handling](#triggers-events-for-recursive-handling)
   - [Nexthop Fixup Handling](#nexthop-fixup-handling)
-    - [Nexthop ID](#nexthop-id)
+    - [NHG ID](#nhg-id)
     - [zebra\_rnh\_fixup\_depends()](#zebra_rnh_fixup_depends)
     - [Step by step illustrations](#step-by-step-illustrations)
     - [Throttle protocol client's route update events](#throttle-protocol-clients-route-update-events)
@@ -174,14 +174,14 @@ If one of the paths (path 10.1.0.28) for prefix 200.0.0.0/24 is removed, Zebra w
     <figcaption>Figure 3. The starting point for a path removal<figcaption>
 </figure>
 
-For achieving this quick fixup, we need the following three changes in zebra. 
-1. Change NHG's Nexthop ID hash method
-2. Add a new function zebra_rnh_fixup_depends() to update involved NHGs in dataplanes.
+For achieving this quick fixup, we need the following changes. 
+1. Change NHG ID hash method
+2. Add a new function zebra_rnh_fixup_depends() to make a quick fixup on involved NHGs in dataplanes.
 3. Throttle protocol client's route update events if needed
 
 We will describe each change in detail in the following sections. 
 
-#### Nexthop ID
+#### NHG ID
 When zebra generates a hash entry for the recursive Next Hop Group (NHG), it presently utilizes both the nexthop addresses and their resolved nexthop addresses, along with additional information. The hash key is via nexthop_group_hash() shown below. Consequently, if the underlying paths undergo modifications, the recursive NHG must obtain a new NHG ID due to alterations in its key. This change in NHG ID results in the need for all routes to rebind with the new NHG, even if the recursive nexthops remain unchanged.
 
 
@@ -219,14 +219,14 @@ uint32_t nexthop_group_hash_no_recurse(const struct nexthop_group *nhg)
 
 #### zebra_rnh_fixup_depends()
 
-This newly added function is inserted into the existing route convergence work flow, which enables zebra to make a quick fixup on involved nexthop groups before notifying the protocol client for route updates. This quick fixup would help to minimize the trafic loss window when some path is known to be broken. 
+This newly added function is inserted into the existing route convergence work flow, which enables zebra to make a quick fixup on involved nexthop groups before notifying the protocol client for route updates. This quick fixup is made based on current information available in zebra. The goal is to make some quick bandage fix when some path is known to be broken. Protocol clients may provide different paths later after routes are converged.
 
 <figure align=center>
     <img src="images/zebra_rnh_fixup_depends.png" >
     <figcaption>Figure 5. zebra_rnh_fixup_depends()<figcaption>
 </figure>
 
-The function marked in blue serves a quick fixup purpose. It gets triggered before the protocol clients get notified for routes updating. zebra_rnh_fixup_depends() is called from zebra_rnh_eval_nexthop_entry() after zebra decides that rnh's state is changed. 
+The function marked in blue serves the quick fixup purpose. It gets triggered before the protocol clients get notified for routes updating. zebra_rnh_fixup_depends() is called from zebra_rnh_eval_nexthop_entry() after zebra decides that rnh's state is changed. 
 
 ``` c
 static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
@@ -271,7 +271,7 @@ The main work flow for zebra_rnh_fixup_depends() is the following
 1. Find the nexthop hash entry for this rnh
 2. Walk through this nexthop hash entry's nhg_dependents list and update each NHG involved in dataplane
 
-Note: this function would only walk one level up to NHG. The further level would be triggered via protocol clients' route updates.
+Note: this function would only walk one level up to NHG. The further level if any would be triggered via protocol clients' further route updates.
 
 #### Step by step illustrations
 
@@ -282,7 +282,7 @@ Assuming the initial state of EVPN underlay routes is the following
     <figcaption>Figure 6. initial state of the routes<figcaption>
 </figure>
 
-After BGP learns 200.0.0.0/24's path 10.0.1.28 is withdrew, BGP would send a route update for 200.0.0.0/24 to Zebra with two remaining paths. After Zebra updates this route, it reaches the state shown in Figure 7.
+After BGP learns 200.0.0.0/24's path 10.0.1.28 is withdrew, BGP would send a route update for 200.0.0.0/24 to zebra with two remaining paths. After zebra updates this route, it reaches the state shown in Figure 7.
 
 <figure align=center>
     <img src="images/nhg_removed_state.png" >
@@ -300,7 +300,7 @@ Then zebra walks through nht list of the route entry 200.0.0.0/24 and handle eac
     <img src="images/find_nhg_by_rnh.png" >
 </figure>
 
-zebra_rnh_fixup_depends() would be triggered by zebra_rnh_eval_nexthop_entry() if rnh's state is changed. This function would use 200.0.0.1 to find out its corresponding nhg_hash_entry (NHG 74 in this example). From NHG 74, we back walk to all its dependent NHGs via NHG 74's *nhg_dependents list. At each dependent NHG (NHG 73 in this example), zebra performs a quick fixup to dataplanes. In this example, since rnh is resolved via 200.0.0.0/24 which has been updated to NHG 90, NHG 73 would update dataplanes with five paths. This quick fixup would help to stop traffic loss via these dependent NHGs and independent from the number of routes pointing to them. 
+zebra_rnh_fixup_depends() would be triggered by zebra_rnh_eval_nexthop_entry() if rnh's state is changed. This function would use 200.0.0.1 to find out its corresponding nhg_hash_entry (NHG 74 in this example). From NHG 74, we back walk to all its dependent NHGs via NHG 74's *nhg_dependents list. At each dependent NHG (NHG 73 in this example), zebra performs a quick fixup to dataplanes. In this example, since rnh is resolved via 200.0.0.0/24 which has been updated to NHG 90, NHG 73 would update dataplanes with five paths. This quick fixup would help to stop traffic loss via these dependent NHGs and be independent from the number of routes pointing to them. 
 
 <figure align=center>
     <img src="images/nhg_depend_update.png" >
