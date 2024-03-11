@@ -314,7 +314,15 @@ Notes:
 2. The same logic and work flow could be applied to add paths to NHG, a.k.a zebra_rnh_fixup_depends() is a generic logic.
 
 #### Throttle protocol client's route update events
-Zebra will always inform protocol clients that nexthop is changed. Protocol client could decide if it needs to throttle the corresponding routes update events if there is no changes in reachability and metrics.
+Zebra will always inform protocol clients that nexthop is changed. Protocol client could decide if it needs to throttle the corresponding routes update events if there is no changes in reachability and metrics. For SONiC, we will only consider BGP's handling. 
+
+| Cases |     Handling    |       Comments       | 
+|:---|:-----------|:----------------------|
+| Nexthop and routes are in the same global table | BGP will always reissue routes download | It could trigger fixup handling if there are recursive layers further |
+| Nexthop and routes are in the different table, and nexthops' reachabilities are changed. | BGP will always reissue routes download. | This is PIC edge case for updating VPN context properly. |
+| Nexthop and routes are in the different table. Nexthops' reachabilities are not changed and there is no metric change as well. |  BGP will skip reissue routes download. | This is the PIC core case which we could throttle routes updating. |
+| Other cases | BGP will always reissue routes download. | safe net |
+
 
 ### FPM and Orchagent Changes
 THis approach relies on the following two changes for updating NHG in dataplane.
