@@ -4,7 +4,7 @@
 ## Revision
 | Rev |     Date    |       Author           | Change Description                |
 |:---:|:-----------:|:----------------------:|-----------------------------------|
-| 0.1 | Oct    2023 |                        | Initial Draft                     |
+| 0.1 | Oct    2023 |  Yu Han / Yongxin Cao  | Initial Draft                     |
 
 <!-- omit in toc -->
 ## Table of Content
