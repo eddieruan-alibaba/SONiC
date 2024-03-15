@@ -293,17 +293,20 @@ Zebra updates the route with new NHG 90 which has two paths, zebra sends the rou
 
 <figure align=center>
     <img src="images/nhg_for_dataplane.png" >
+    <figcaption>Figure 8<figcaption>
 </figure>
 
 Then zebra walks through nht list of the route entry 200.0.0.0/24 and handle each rnh in the list via zebra_rnh_eval_nexthop_entry().
 <figure align=center>
     <img src="images/find_nhg_by_rnh.png" >
+    <figcaption>Figure 9<figcaption>
 </figure>
 
 zebra_rnh_fixup_depends() would be triggered by zebra_rnh_eval_nexthop_entry() if rnh's state is changed. This function would use 200.0.0.1 to find out its corresponding nhg_hash_entry (NHG 74 in this example). From NHG 74, we back walk to all its dependent NHGs via NHG 74's *nhg_dependents list. At each dependent NHG (NHG 73 in this example), zebra performs a quick fixup to dataplanes. In this example, since rnh is resolved via 200.0.0.0/24 which has been updated to NHG 90, NHG 73 would update dataplanes with five paths. This quick fixup would help to stop traffic loss via these dependent NHGs and be independent from the number of routes pointing to them. 
 
 <figure align=center>
     <img src="images/nhg_depend_update.png" >
+    <figcaption>Figure 10<figcaption>
 </figure>
 
 After zebra_rnh_fixup_depends() is done, Zebra continues its original processing，calling zebra_rnh_notify_protocol_clients() to inform BGP that 200.0.0.1 as nexthop is changed.
@@ -334,34 +337,34 @@ THis approach relies on the following two changes for updating NHG in dataplane.
 ### Test Case 1: local link failure
 <figure align=center>
     <img src="images/testcase1.png" >
-    <figcaption>Figure 8.local link failure <figcaption>
+    <figcaption>Figure 11.local link failure <figcaption>
 </figure>
 
 ### Test Case 2: IGP remote link/node failure
 <figure align=center>
     <img src="images/testcase2.png" >
-    <figcaption>Figure 9. IGP remote link/node failure
+    <figcaption>Figure 12. IGP remote link/node failure
  <figcaption>
 </figure>
 
 ### Test Case 3: IGP remote PE failure
 <figure align=center>
     <img src="images/testcase3.png" >
-    <figcaption>Figure 10. IGP remote PE failure
+    <figcaption>Figure 13. IGP remote PE failure
  <figcaption>
 </figure>
 
 ### Test Case 4: BGP remote PE node failure
 <figure align=center>
     <img src="images/testcase4.png" >
-    <figcaption>Figure 11. BGP remote PE node failure
+    <figcaption>Figure 14. BGP remote PE node failure
  <figcaption>
 </figure>
 
 ### Test Case 5: Remote PE-CE link failure
 <figure align=center>
     <img src="images/testcase5.png" >
-    <figcaption>Figure 12. Remote PE-CE link failure
+    <figcaption>Figure 15. Remote PE-CE link failure
  <figcaption>
 </figure>
 
