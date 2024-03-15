@@ -39,7 +39,7 @@ The objective of this document is to minimize packet loss windows on SONiC devic
 Due to the Linux kernel lacks support for recursive routes, FRR Zebra flattens the nexthop information when transferring recursive nexthop group information to dataplanes. Presently, when a path becomes unavailable, Zebra notifies corresponding protocol processes, allowing them to reissue route update events, which in turn update the forwarding chain of routes in the dataplane. This method contributes to the issue under discussion within the SONiC Routing Working Group.
 
 <figure align=center>
-    <img src="images/srv6_igp2bgp.png" >
+    <img src="images_recursive/srv6_igp2bgp.png" >
     <figcaption>Figure 1. Alibaba issue Underlay routes flap affecting Overlay SRv6 routes <figcaption>
 </figure>
 
@@ -130,7 +130,7 @@ struct rnh {
 The following diagram provides a brief description of Zebra's current recursive convergence process.
 
 <figure align=center>
-    <img src="images/route_converge_original.png" >
+    <img src="images_recursive/route_converge_original.png" >
     <figcaption>Figure 2. route convergence process<figcaption>
 </figure>
 
@@ -170,7 +170,7 @@ To streamline the discussion and ensure generality, we employ the following recu
 If one of the paths (path 10.1.0.28) for prefix 200.0.0.0/24 is removed, Zebra will actively update two routes during the recursive convergence handling, facilitated by the BGP client. One route update pertains to 200.0.0.0/24, while the other update concerns 2.2.2.2/32. In this scenario, route 200.0.0.0/24 experiences the removal of one path, while the reachability of route 2.2.2.2/32 remains unaffected. To minimize the traffic loss window, it's essential to promptly address the affected nexthops in the dataplane before zebra completes its route convergence process.
 
 <figure align=center>
-    <img src="images/path_remove.png" >
+    <img src="images_recursive/path_remove.png" >
     <figcaption>Figure 3. The starting point for a path removal<figcaption>
 </figure>
 
@@ -222,7 +222,7 @@ uint32_t nexthop_group_hash_no_recurse(const struct nexthop_group *nhg)
 This newly added function is inserted into the existing route convergence work flow, which enables zebra to make a quick fixup on involved nexthop groups before notifying the protocol client for route updates. This quick fixup is made based on current information available in zebra. The goal is to make some quick bandage fix when some path is known to be broken. Protocol clients may provide different paths later after routes are converged.
 
 <figure align=center>
-    <img src="images/zebra_rnh_fixup_depends.png" >
+    <img src="images_recursive/zebra_rnh_fixup_depends.png" >
     <figcaption>Figure 5. zebra_rnh_fixup_depends()<figcaption>
 </figure>
 
@@ -278,34 +278,34 @@ Note: this function would only walk one level up to NHG. The further level if an
 Assuming the initial state of EVPN underlay routes is the following
 
 <figure align=center>
-    <img src="images/nhg_initial_state.png" >
+    <img src="images_recursive/nhg_initial_state.png" >
     <figcaption>Figure 6. initial state of the routes<figcaption>
 </figure>
 
 After BGP learns 200.0.0.0/24's path 10.0.1.28 is withdrew, BGP would send a route update for 200.0.0.0/24 to zebra with two remaining paths. After zebra updates this route, it reaches the state shown in Figure 7.
 
 <figure align=center>
-    <img src="images/nhg_removed_state.png" >
+    <img src="images_recursive/nhg_removed_state.png" >
     <figcaption>Figure 7. one path is removed for route 200.0.0.0/24<figcaption>
 </figure>
 
 Zebra updates the route with new NHG 90 which has two paths, zebra sends the route update to dataplanes. This is the current approach, which would recover all traffic via route 200.0.0.0/24.
 
 <figure align=center>
-    <img src="images/nhg_for_dataplane.png" >
+    <img src="images_recursive/nhg_for_dataplane.png" >
     <figcaption>Figure 8<figcaption>
 </figure>
 
 Then zebra walks through nht list of the route entry 200.0.0.0/24 and handle each rnh in the list via zebra_rnh_eval_nexthop_entry().
 <figure align=center>
-    <img src="images/find_nhg_by_rnh.png" >
+    <img src="images_recursive/find_nhg_by_rnh.png" >
     <figcaption>Figure 9<figcaption>
 </figure>
 
 zebra_rnh_fixup_depends() would be triggered by zebra_rnh_eval_nexthop_entry() if rnh's state is changed. This function would use 200.0.0.1 to find out its corresponding nhg_hash_entry (NHG 74 in this example). From NHG 74, we back walk to all its dependent NHGs via NHG 74's *nhg_dependents list. At each dependent NHG (NHG 73 in this example), zebra performs a quick fixup to dataplanes. In this example, since rnh is resolved via 200.0.0.0/24 which has been updated to NHG 90, NHG 73 would update dataplanes with five paths. This quick fixup would help to stop traffic loss via these dependent NHGs and be independent from the number of routes pointing to them. 
 
 <figure align=center>
-    <img src="images/nhg_depend_update.png" >
+    <img src="images_recursive/nhg_depend_update.png" >
     <figcaption>Figure 10<figcaption>
 </figure>
 
@@ -336,34 +336,34 @@ THis approach relies on the following two changes for updating NHG in dataplane.
 ### Normal Case's Forwarding Chain Information
 ### Test Case 1: local link failure
 <figure align=center>
-    <img src="images/testcase1.png" >
+    <img src="images_recursive/testcase1.png" >
     <figcaption>Figure 11.local link failure <figcaption>
 </figure>
 
 ### Test Case 2: IGP remote link/node failure
 <figure align=center>
-    <img src="images/testcase2.png" >
+    <img src="images_recursive/testcase2.png" >
     <figcaption>Figure 12. IGP remote link/node failure
  <figcaption>
 </figure>
 
 ### Test Case 3: IGP remote PE failure
 <figure align=center>
-    <img src="images/testcase3.png" >
+    <img src="images_recursive/testcase3.png" >
     <figcaption>Figure 13. IGP remote PE failure
  <figcaption>
 </figure>
 
 ### Test Case 4: BGP remote PE node failure
 <figure align=center>
-    <img src="images/testcase4.png" >
+    <img src="images_recursive/testcase4.png" >
     <figcaption>Figure 14. BGP remote PE node failure
  <figcaption>
 </figure>
 
 ### Test Case 5: Remote PE-CE link failure
 <figure align=center>
-    <img src="images/testcase5.png" >
+    <img src="images_recursive/testcase5.png" >
     <figcaption>Figure 15. Remote PE-CE link failure
  <figcaption>
 </figure>
