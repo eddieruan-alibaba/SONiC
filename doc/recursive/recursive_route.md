@@ -198,7 +198,7 @@ uint32_t nexthop_group_hash(const struct nexthop_group *nhg)
 }
 ```
 
-Currently, nexthop_group_hash_no_recurse() is used for segment route's NHG only. We want to extend this hash function to all NHGs. This change allows us to reuse recursive NHG when the recursive nexthops are not changed. One benefit from this change is that protocol client could decides not to reissue all routes and recursive NHG could be reused. 
+We want to extend the hash function below to all NHGs. This change allows us to reuse recursive NHG when the recursive nexthops are not changed. One benefit from this change is that protocol client could decides not to reissue all routes and recursive NHG could be reused. 
 
 ``` c
 uint32_t nexthop_group_hash_no_recurse(const struct nexthop_group *nhg)
