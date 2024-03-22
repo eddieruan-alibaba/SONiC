@@ -153,22 +153,30 @@ Here are a list of trigger events which we want to take care via recursive route
 ### Nexthop Fixup Handling
 To streamline the discussion and ensure generality, we employ the following recursive routes as an illustration to demonstrate the workflow of the new fixup and its potential to reduce the traffic loss window.
 
-    B>  2.2.2.2/32 [200/0] via 100.0.0.1 (recursive), weight 1, 00:11:50
-      *                      via 10.1.0.16, Ethernet1, weight 1, 00:11:50
-      *                      via 10.1.0.17, Ethernet1, weight 1, 00:11:50
-      *                      via 10.1.0.18, Ethernet1, weight 1, 00:11:50
-                           via 200.0.0.1 (recursive), weight 1, 00:11:50
-      *                      via 10.1.0.26, Ethernet1, weight 1, 00:11:50
-      *                      via 10.1.0.27, Ethernet1, weight 1, 00:11:50
-      *                      via 10.1.0.28, Ethernet1, weight 1, 00:11:50
-    B>* 100.0.0.0/24 [200/0] via 10.1.0.16, Ethernet1, weight 1, 00:11:57
-      *                      via 10.1.0.17, Ethernet1, weight 1, 00:11:57
-      *                      via 10.1.0.18, Ethernet1, weight 1, 00:11:57
-    B>* 200.0.0.0/24 [200/0] via 10.1.0.26, Ethernet1, weight 1, 00:11:50
-      *                      via 10.1.0.27, Ethernet1, weight 1, 00:11:50
-      *                      via 10.1.0.28, Ethernet1, weight 1, 00:11:50
+    B>  2.2.2.2/32 [200/0] (70) via 100.0.0.1 (recursive), weight 1, 00:11:28
+      *                           via 10.1.1.11, Ethernet1, weight 1, 00:11:28
+      *                           via 10.2.2.11, Ethernet2, weight 1, 00:11:28
+      *                           via 10.3.3.11, Ethernet3, weight 1, 00:11:28
+                                via 200.0.0.1 (recursive), weight 1, 00:11:28
+      *                           via 10.4.4.12, Ethernet4, weight 1, 00:11:28
+      *                           via 10.5.5.12, Ethernet5, weight 1, 00:11:28
+      *                           via 10.6.6.12, Ethernet6, weight 1, 00:11:28
+    B>  3.3.3.3/32 [200/0] (70) via 100.0.0.1 (recursive), weight 1, 00:11:28
+      *                           via 10.1.1.11, Ethernet1, weight 1, 00:11:28
+      *                           via 10.2.2.11, Ethernet2, weight 1, 00:11:28
+      *                           via 10.3.3.11, Ethernet3, weight 1, 00:11:28
+                                via 200.0.0.1 (recursive), weight 1, 00:11:28
+      *                           via 10.4.4.12, Ethernet4, weight 1, 00:11:28
+      *                           via 10.5.5.12, Ethernet5, weight 1, 00:11:28
+      *                           via 10.6.6.12, Ethernet6, weight 1, 00:11:28
+    B>* 100.0.0.0/24 [200/0] (51) via 10.1.1.11, Ethernet1, weight 1, 00:11:28
+      *                           via 10.2.2.11, Ethernet2, weight 1, 00:11:28
+      *                           via 10.3.3.11, Ethernet3, weight 1, 00:11:28
+    B>* 200.0.0.0/24 [200/0] (61) via 10.4.4.12, Ethernet4, weight 1, 00:11:28
+      *                           via 10.5.5.12, Ethernet5, weight 1, 00:11:28
+      *                           via 10.6.6.12, Ethernet6, weight 1, 00:11:28
 
-If one of the paths (path 10.1.0.28) for prefix 200.0.0.0/24 is removed, Zebra will actively update two routes during the recursive convergence handling, facilitated by the BGP client. One route update pertains to 200.0.0.0/24, while the other update concerns 2.2.2.2/32. In this scenario, route 200.0.0.0/24 experiences the removal of one path, while the reachability of route 2.2.2.2/32 remains unaffected. To minimize the traffic loss window, it's essential to promptly address the affected nexthops in the dataplane before zebra completes its route convergence process.
+If one of the paths (path 10.6.6.12) for prefix 200.0.0.0/24 is removed, Zebra will actively update two routes during the recursive convergence handling, facilitated by the BGP client. One route update pertains to 200.0.0.0/24, while the other update concerns 2.2.2.2/32. In this scenario, route 200.0.0.0/24 experiences the removal of one path, while the reachability of route 2.2.2.2/32 remains unaffected. To minimize the traffic loss window, it's essential to promptly address the affected nexthops in the dataplane before zebra completes its route convergence process.
 
 <figure align=center>
     <img src="images_recursive/path_remove.png" >
