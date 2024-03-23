@@ -299,7 +299,7 @@ After BGP learns 200.0.0.0/24's path 10.6.6.12 is withdrew, BGP would send a rou
     <figcaption>Figure 7. one path is removed for route 200.0.0.0/24<figcaption>
 </figure>
 
-Zebra updates the route with new NHG 90 which has two paths, zebra sends the route update to dataplanes. This is the current approach, which would recover all traffic via route 200.0.0.0/24.
+Zebra updates the route with new NHG 242 which has two paths, zebra sends the route update to dataplanes. This is the current approach, which would recover all traffic via route 200.0.0.0/24.
 
 <figure align=center>
     <img src="images_recursive/nhg_for_dataplane.png" >
