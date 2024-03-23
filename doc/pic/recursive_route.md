@@ -292,7 +292,7 @@ Assuming the initial state of EVPN underlay routes is the following
     <figcaption>Figure 6. initial state of the routes<figcaption>
 </figure>
 
-After BGP learns 200.0.0.0/24's path 10.0.1.28 is withdrew, BGP would send a route update for 200.0.0.0/24 to zebra with two remaining paths. After zebra updates this route, it reaches the state shown in Figure 7.
+After BGP learns 200.0.0.0/24's path 10.6.6.12 is withdrew, BGP would send a route update for 200.0.0.0/24 to zebra with two remaining paths. After zebra updates this route, it reaches the state shown in Figure 7.
 
 <figure align=center>
     <img src="images_recursive/nhg_removed_state.png" >
