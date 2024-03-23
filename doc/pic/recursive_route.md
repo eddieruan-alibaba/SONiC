@@ -63,7 +63,7 @@ struct nhg_hash_entry {
 	afi_t afi;
 	vrf_id_t vrf_id;
 
-    ...
+	...
 
 	/* Dependency trees for other entries.
 	 * For instance a group with two
