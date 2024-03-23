@@ -176,7 +176,7 @@ To streamline the discussion and ensure generality, we employ the following recu
       *                           via 10.5.5.12, Ethernet5, weight 1, 00:11:28
       *                           via 10.6.6.12, Ethernet6, weight 1, 00:11:28
 
-If one of the paths (path 10.6.6.12) for prefix 200.0.0.0/24 is removed, Zebra will actively update two routes during the recursive convergence handling, facilitated by the BGP client. One route update pertains to 200.0.0.0/24, while the other update concerns 2.2.2.2/32. In this scenario, route 200.0.0.0/24 experiences the removal of one path, while the reachability of route 2.2.2.2/32 remains unaffected. To minimize the traffic loss window, it's essential to promptly address the affected nexthops in the dataplane before zebra completes its route convergence process.
+If one of the paths (path 10.6.6.12) for prefix 200.0.0.0/24 is removed, Zebra will actively update two routes during the recursive convergence handling, facilitated by the BGP client. One route update pertains to 200.0.0.0/24, while the other update concerns 2.2.2.2/32 and 3.3.3.3/32. In this scenario, route 200.0.0.0/24 experiences the removal of one path, while the reachability of route 2.2.2.2/32 or 3.3.3.3/32 remains unaffected. To minimize the traffic loss window, it's essential to promptly address the affected nexthops in the dataplane before zebra completes its route convergence process.
 
 <figure align=center>
     <img src="images_recursive/path_remove.png" >
