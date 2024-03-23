@@ -312,7 +312,7 @@ Then zebra walks through nht list of the route entry 200.0.0.0/24 and handle eac
     <figcaption>Figure 9<figcaption>
 </figure>
 
-zebra_rnh_fixup_depends() would be triggered by zebra_rnh_eval_nexthop_entry() if rnh's state is changed. This function would use 200.0.0.1 to find out its corresponding nhg_hash_entry (NHG 74 in this example). From NHG 74, we back walk to all its dependent NHGs via NHG 74's *nhg_dependents list. At each dependent NHG (NHG 73 in this example), zebra performs a quick fixup to dataplanes. In this example, since rnh is resolved via 200.0.0.0/24 which has been updated to NHG 90, NHG 73 would update dataplanes with five paths. This quick fixup would help to stop traffic loss via these dependent NHGs and be independent from the number of routes pointing to them. 
+zebra_rnh_fixup_depends() would be triggered by zebra_rnh_eval_nexthop_entry() if rnh's state is changed. This function would use 200.0.0.1 to find out its corresponding nhg_hash_entry (NHG 71 in this example). From NHG 71, we back walk to all its dependent NHGs via NHG 71's *nhg_dependents list. At each dependent NHG (NHG 70 in this example), zebra performs a quick fixup to dataplanes. In this example, since rnh is resolved via 200.0.0.0/24 which has been updated to NHG 242, NHG 70 would update dataplanes with five paths. This quick fixup would help to stop traffic loss via these dependent NHGs and be independent from the number of routes pointing to them. 
 
 <figure align=center>
     <img src="images_recursive/nhg_depend_update.png" >
