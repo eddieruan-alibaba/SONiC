@@ -144,7 +144,7 @@ Here are a list of trigger events which we want to take care via recursive route
 | Trigger Types |     Events    |       Possible handling          | 
 |:---|:-----------|:----------------------|
 | Case 1: IGP local failure | A local link goes down | Currently Orchagent handles local link down event and triggers a quick fixup which removes the failed path in HW ECMP. Zebra will be triggered from connected_down() handling. BGP may be informed to install a backup path if needed. This is a special PIC core case, a.k.a PIC local |
-| Case 2: IGP remote link/node failture  | A remote link goes down, IGP leaf's reachability is not changed, only IGP paths are updated. | IGP gets route withdraw events from IGP peer. It would inform zebra with updated paths.THere are two possilbe triggers. One is that zebra would be triggered from zread_route_add() with updated path list. The other is that zebra would be informed via zread_route_del(). In the second case, the impacted nexthop could be able to resolve its corresponding RNH via a less specific prefix. It is the PIC core handling case. |
+| Case 2: IGP remote link/node failure  | A remote link goes down, IGP leaf's reachability is not changed, only IGP paths are updated. | IGP gets route withdraw events from IGP peer. It would inform zebra with updated paths.There are two possible triggers. One is that zebra would be triggered from zread_route_add() with updated path list. The other is that zebra would be informed via zread_route_del(). In the second case, the impacted nexthop could be able to resolve its corresponding RNH via a less specific prefix. It is the PIC core handling case. |
 | Case 3: IGP remote PE failure  | A remote PE node is unreachable in IGP domain. | IGP triggers IGP leaf delete event. Zebra will be triggered via zread_route_del() and zebra can't resolve its corresponding BGP NH via less specific prefix. It is the PIC edge handling case |
 | Case 4: BGP remote PE node failure  | BGP remote node down | It should be detected by IGP remote node down first before BGP reacts, a.k.a the same as the above step. This is the PIC edge handling case.|
 | Case 5: Remote PE-CE link failure | This is remote PE's PIC local case.  | Remote PE will trigger PIC local handling for quick traffic fix up. Local PE will be updated after BGP gets informed. |
@@ -198,7 +198,7 @@ uint32_t nexthop_group_hash(const struct nexthop_group *nhg)
 }
 ```
 
-We want to extend the hash function below to all NHGs. This change allows us to reuse recursive NHG when the recursive nexthops are not changed. One benefit from this change is that protocol client could decides not to reissue all routes and recursive NHG could be reused. 
+We want to extend the hash function below to all NHGs. This change allows us to reuse recursive NHG when the recursive nexthops are not changed. One benefit from this change is that protocol client could decide not to reissue all routes and recursive NHG could be reused. 
 
 ``` c
 uint32_t nexthop_group_hash_no_recurse(const struct nexthop_group *nhg)
@@ -309,8 +309,8 @@ zebra_rnh_fixup_depends() would be triggered by zebra_rnh_eval_nexthop_entry() i
     <figcaption>Figure 10<figcaption>
 </figure>
 
-After zebra_rnh_fixup_depends() is done, Zebra continues its original processing，calling zebra_rnh_notify_protocol_clients() to inform BGP that 200.0.0.1 as nexthop is changed.
-BGP triggers 2.2.2.2 and other routes updates which are via 200.0.0.1. During 2.2.2.2's Zebra route handling, zebra would walk 2.2.2.2's rnh list if it is not empty.
+After zebra_rnh_fixup_depends() is done, zebra continues its original processing，calling zebra_rnh_notify_protocol_clients() to inform BGP that 200.0.0.1 as nexthop is changed.
+BGP triggers 2.2.2.2 and other routes updates which are via 200.0.0.1. During 2.2.2.2's zebra route handling, zebra would walk 2.2.2.2's rnh list if it is not empty.
 
 Notes: 
 1. Although this illustrations are on IGP remote link/node failure case, the similar work flow could be applied to local link failure and remote PE failure case as well.
@@ -328,7 +328,7 @@ Zebra will always inform protocol clients that nexthop is changed. Protocol clie
 
 
 ### FPM and Orchagent Changes
-THis approach relies on the following two changes for updating NHG in dataplane.
+This approach relies on the following two changes for updating NHG in dataplane.
 1. Fpm needs to add a new schema to take each member as nexthop group ID and update APP DB. (Rely on BRCM and NTT's changes)
 2. Orchagent picks up event from APP DB and trigger nexthop group programming. Neighorch needs to handle this new schema without change too much on existing codes. (Rely on BRCM and NTT's changes)
 
