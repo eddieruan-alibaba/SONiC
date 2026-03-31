@@ -1,6 +1,35 @@
 <h1 align="center">RIB FIB Route Convergence Handling LLD </h1>
 
 # Table of Contents <!-- omit in toc -->
+- [Problem Statements](#problem-statements)
+- [Existing NHG MGR codes](#existing-nhg-mgr-codes)
+- [fib\_nhg\_trigger\_node\_quick\_fixup()](#fib_nhg_trigger_node_quick_fixup)
+  - [Functionality:](#functionality)
+- [fib\_nhg\_back\_walk()](#fib_nhg_back_walk)
+  - [Parameters:](#parameters)
+  - [Usage:](#usage)
+  - [Main Logic:](#main-logic)
+- [Changes in  class RIBNHGEntry](#changes-in--class-ribnhgentry)
+  - [New Field: m\_resolved\_enable\_group](#new-field-m_resolved_enable_group)
+  - [Method Update: RIBNHGEntry::getNextHopGroupFields()](#method-update-ribnhgentrygetnexthopgroupfields)
+- [fib\_nhg\_walk\_spec\_for\_node\_quick\_fixup](#fib_nhg_walk_spec_for_node_quick_fixup)
+  - [Main Logic:](#main-logic-1)
+- [fib\_nhg\_prune\_spec\_for\_node\_quick\_fixup](#fib_nhg_prune_spec_for_node_quick_fixup)
+  - [Main Logic:](#main-logic-2)
+- [Test cases](#test-cases)
+  - [Test Topology 1 Global table recursive routes](#test-topology-1-global-table-recursive-routes)
+    - [Test case Local Failure Simulation](#test-case-local-failure-simulation)
+    - [Test case Remote Failure Simulation 1](#test-case-remote-failure-simulation-1)
+    - [Test remote failure 2](#test-remote-failure-2)
+  - [Test Topology 2 Global table recursive routes](#test-topology-2-global-table-recursive-routes)
+    - [Test local failure](#test-local-failure)
+    - [Test remote failure 1](#test-remote-failure-1)
+    - [Test remote failure 2](#test-remote-failure-2-1)
+    - [Test remote failure 3](#test-remote-failure-3)
+  - [Test Topology 3 SRv6 VPN case](#test-topology-3-srv6-vpn-case)
+    - [Test local failure](#test-local-failure-1)
+    - [Test remote failure](#test-remote-failure)
+
 
 # Problem Statements
 In the current SONiC architecture, orchagent handles local port down events by rapidly updating failed load balance members to minimize the traffic loss window. However, in other failure scenarios, FRR creates a new Next Hop Group (NHG) and migrates prefixes sequentially. Consequently, the traffic loss window is proportional to the number of prefixes.
