@@ -1,0 +1,364 @@
+{
+  "NHG_FULL_STATE_TABLE:234": {
+    "id": 234,
+    "key": 1200202866,
+    "weight": 1,
+    "flags": 3,
+    "nhg_flags": 2179,
+    "ifname": "",
+    "nh_grp_full_list": [],
+    "depends": [],
+    "dependents": [
+      238
+    ],
+    "type": "NEXTHOP_TYPE_IPV6_IFINDEX",
+    "vrf_id": 0,
+    "ifindex": 143,
+    "nh_label_type": "ZEBRA_LSP_NONE",
+    "gate": "fc08::2",
+    "src": "::",
+    "rmap_src": "::",
+    "nh_srv6": null
+  },
+  "NHG_FULL_STATE_TABLE:237": {
+    "id": 237,
+    "key": 4129417754,
+    "weight": 1,
+    "flags": 3,
+    "nhg_flags": 3,
+    "ifname": "",
+    "nh_grp_full_list": [],
+    "depends": [],
+    "dependents": [
+      238
+    ],
+    "type": "NEXTHOP_TYPE_IPV6_IFINDEX",
+    "vrf_id": 0,
+    "ifindex": 140,
+    "nh_label_type": "ZEBRA_LSP_NONE",
+    "gate": "fc06::2",
+    "src": "::",
+    "rmap_src": "::",
+    "nh_srv6": null
+  },
+  "NHG_FULL_STATE_TABLE:238": {
+    "id": 238,
+    "key": 2810095846,
+    "weight": 0,
+    "flags": 0,
+    "nhg_flags": 2179,
+    "ifname": "",
+    "nh_grp_full_list": [
+      {
+        "id": 234,
+        "weight": 1,
+        "num_direct": 0
+      },
+      {
+        "id": 237,
+        "weight": 1,
+        "num_direct": 0
+      }
+    ],
+    "depends": [
+      234,
+      237
+    ],
+    "dependents": [
+      257,
+      258,
+      263,
+      264
+    ],
+    "type": "NEXTHOP_TYPE_INVALID",
+    "vrf_id": 0,
+    "ifindex": 0,
+    "nh_label_type": "ZEBRA_LSP_NONE",
+    "gate": "::",
+    "src": "::",
+    "rmap_src": "::",
+    "nh_srv6": null
+  },
+  "NHG_FULL_STATE_TABLE:257": {
+    "id": 257,
+    "key": 3486981787,
+    "weight": 0,
+    "flags": 0,
+    "nhg_flags": 11,
+    "ifname": "",
+    "nh_grp_full_list": [
+      {
+        "id": 238,
+        "weight": 0,
+        "num_direct": 2
+      },
+      {
+        "id": 234,
+        "weight": 1,
+        "num_direct": 0
+      },
+      {
+        "id": 237,
+        "weight": 1,
+        "num_direct": 0
+      }
+    ],
+    "depends": [
+      238
+    ],
+    "dependents": [
+      256
+    ],
+    "type": "NEXTHOP_TYPE_INVALID",
+    "vrf_id": 0,
+    "ifindex": 0,
+    "nh_label_type": "ZEBRA_LSP_NONE",
+    "gate": "::",
+    "src": "::",
+    "rmap_src": "::",
+    "nh_srv6": null
+  },
+  "NHG_FULL_STATE_TABLE:258": {
+    "id": 258,
+    "key": 1819221934,
+    "weight": 0,
+    "flags": 0,
+    "nhg_flags": 11,
+    "ifname": "",
+    "nh_grp_full_list": [
+      {
+        "id": 238,
+        "weight": 0,
+        "num_direct": 2
+      },
+      {
+        "id": 234,
+        "weight": 1,
+        "num_direct": 0
+      },
+      {
+        "id": 237,
+        "weight": 1,
+        "num_direct": 0
+      }
+    ],
+    "depends": [
+      238
+    ],
+    "dependents": [
+      256
+    ],
+    "type": "NEXTHOP_TYPE_INVALID",
+    "vrf_id": 0,
+    "ifindex": 0,
+    "nh_label_type": "ZEBRA_LSP_NONE",
+    "gate": "::",
+    "src": "::",
+    "rmap_src": "::",
+    "nh_srv6": null
+  },
+  "NHG_FULL_STATE_TABLE:263": {
+    "id": 263,
+    "key": 2453891513,
+    "weight": 0,
+    "flags": 0,
+    "nhg_flags": 9,
+    "ifname": "",
+    "nh_grp_full_list": [
+      {
+        "id": 238,
+        "weight": 0,
+        "num_direct": 2
+      },
+      {
+        "id": 234,
+        "weight": 1,
+        "num_direct": 0
+      },
+      {
+        "id": 237,
+        "weight": 1,
+        "num_direct": 0
+      }
+    ],
+    "depends": [
+      238
+    ],
+    "dependents": [
+      262
+    ],
+    "type": "NEXTHOP_TYPE_INVALID",
+    "vrf_id": 0,
+    "ifindex": 0,
+    "nh_label_type": "ZEBRA_LSP_NONE",
+    "gate": "::",
+    "src": "::",
+    "rmap_src": "::",
+    "nh_srv6": null
+  },
+  "NHG_FULL_STATE_TABLE:264": {
+    "id": 264,
+    "key": 1837921071,
+    "weight": 0,
+    "flags": 0,
+    "nhg_flags": 9,
+    "ifname": "",
+    "nh_grp_full_list": [
+      {
+        "id": 238,
+        "weight": 0,
+        "num_direct": 2
+      },
+      {
+        "id": 234,
+        "weight": 1,
+        "num_direct": 0
+      },
+      {
+        "id": 237,
+        "weight": 1,
+        "num_direct": 0
+      }
+    ],
+    "depends": [
+      238
+    ],
+    "dependents": [
+      262
+    ],
+    "type": "NEXTHOP_TYPE_INVALID",
+    "vrf_id": 0,
+    "ifindex": 0,
+    "nh_label_type": "ZEBRA_LSP_NONE",
+    "gate": "::",
+    "src": "::",
+    "rmap_src": "::",
+    "nh_srv6": null
+  },
+  "NHG_FULL_STATE_TABLE:256": {
+    "id": 256,
+    "key": 1746145457,
+    "weight": 0,
+    "flags": 0,
+    "nhg_flags": 387,
+    "ifname": "",
+    "nh_grp_full_list": [
+      {
+        "id": 257,
+        "weight": 0,
+        "num_direct": 1
+      },
+      {
+        "id": 238,
+        "weight": 0,
+        "num_direct": 2
+      },
+      {
+        "id": 234,
+        "weight": 1,
+        "num_direct": 0
+      },
+      {
+        "id": 237,
+        "weight": 1,
+        "num_direct": 0
+      },
+      {
+        "id": 258,
+        "weight": 0,
+        "num_direct": 1
+      },
+      {
+        "id": 238,
+        "weight": 0,
+        "num_direct": 2
+      },
+      {
+        "id": 234,
+        "weight": 1,
+        "num_direct": 0
+      },
+      {
+        "id": 237,
+        "weight": 1,
+        "num_direct": 0
+      }
+    ],
+    "depends": [
+      257,
+      258
+    ],
+    "dependents": [],
+    "type": "NEXTHOP_TYPE_INVALID",
+    "vrf_id": 0,
+    "ifindex": 0,
+    "nh_label_type": "ZEBRA_LSP_NONE",
+    "gate": "::",
+    "src": "::",
+    "rmap_src": "::",
+    "nh_srv6": null
+  },
+  "NHG_FULL_STATE_TABLE:262": {
+    "id": 262,
+    "key": 2298968421,
+    "weight": 0,
+    "flags": 0,
+    "nhg_flags": 259,
+    "ifname": "",
+    "nh_grp_full_list": [
+      {
+        "id": 263,
+        "weight": 0,
+        "num_direct": 1
+      },
+      {
+        "id": 238,
+        "weight": 0,
+        "num_direct": 2
+      },
+      {
+        "id": 234,
+        "weight": 1,
+        "num_direct": 0
+      },
+      {
+        "id": 237,
+        "weight": 1,
+        "num_direct": 0
+      },
+      {
+        "id": 264,
+        "weight": 0,
+        "num_direct": 1
+      },
+      {
+        "id": 238,
+        "weight": 0,
+        "num_direct": 2
+      },
+      {
+        "id": 234,
+        "weight": 1,
+        "num_direct": 0
+      },
+      {
+        "id": 237,
+        "weight": 1,
+        "num_direct": 0
+      }
+    ],
+    "depends": [
+      263,
+      264
+    ],
+    "dependents": [],
+    "type": "NEXTHOP_TYPE_INVALID",
+    "vrf_id": 0,
+    "ifindex": 0,
+    "nh_label_type": "ZEBRA_LSP_NONE",
+    "gate": "::",
+    "src": "::",
+    "rmap_src": "::",
+    "nh_srv6": null
+  }
+}

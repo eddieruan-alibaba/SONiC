@@ -1,0 +1,200 @@
+{
+  "NHG_FULL_STATE_TABLE:240": {
+    "id": 240,
+    "key": 1136280590,
+    "weight": 1,
+    "flags": 0,
+    "nhg_flags": 1025,
+    "ifname": "",
+    "nh_grp_full_list": [],
+    "depends": [],
+    "dependents": [
+      239
+    ],
+    "type": "NEXTHOP_TYPE_IPV6",
+    "vrf_id": 0,
+    "ifindex": 0,
+    "nh_label_type": "ZEBRA_LSP_BGP",
+    "gate": "2064:100::1d",
+    "src": "::",
+    "rmap_src": "::",
+    "nh_srv6": {
+      "seg6local_action": "SEG6_LOCAL_ACTION_UNSPEC",
+      "seg6local_ctx": {
+        "nh4": "0.0.0.0",
+        "nh6": "::",
+        "table": 0,
+        "flv": {
+          "flv_ops": 0,
+          "lcblock_len": 0,
+          "lcnode_func_len": 0
+        },
+        "block_len": 0,
+        "node_len": 0,
+        "function_len": 0,
+        "argument_len": 0
+      },
+      "seg6_src": "2064:300::1f",
+      "seg6_segs": {
+        "encap_behavior": "SRV6_HEADEND_BEHAVIOR_H_ENCAPS",
+        "num_segs": 1,
+        "segs": [
+          "fd00:201:201:1::"
+        ]
+      }
+    }
+  },
+  "NHG_FULL_STATE_TABLE:241": {
+    "id": 241,
+    "key": 615032580,
+    "weight": 1,
+    "flags": 0,
+    "nhg_flags": 1025,
+    "ifname": "",
+    "nh_grp_full_list": [],
+    "depends": [],
+    "dependents": [
+      239
+    ],
+    "type": "NEXTHOP_TYPE_IPV6",
+    "vrf_id": 0,
+    "ifindex": 0,
+    "nh_label_type": "ZEBRA_LSP_BGP",
+    "gate": "2064:200::1e",
+    "src": "::",
+    "rmap_src": "::",
+    "nh_srv6": {
+      "seg6local_action": "SEG6_LOCAL_ACTION_UNSPEC",
+      "seg6local_ctx": {
+        "nh4": "0.0.0.0",
+        "nh6": "::",
+        "table": 0,
+        "flv": {
+          "flv_ops": 0,
+          "lcblock_len": 0,
+          "lcnode_func_len": 0
+        },
+        "block_len": 0,
+        "node_len": 0,
+        "function_len": 0,
+        "argument_len": 0
+      },
+      "seg6_src": "2064:300::1f",
+      "seg6_segs": {
+        "encap_behavior": "SRV6_HEADEND_BEHAVIOR_H_ENCAPS",
+        "num_segs": 1,
+        "segs": [
+          "fd00:202:202:2::"
+        ]
+      }
+    }
+  },
+  "NHG_FULL_STATE_TABLE:239": {
+    "id": 239,
+    "key": 1027033510,
+    "weight": 0,
+    "flags": 0,
+    "nhg_flags": 1025,
+    "ifname": "",
+    "nh_grp_full_list": [
+      {
+        "id": 240,
+        "weight": 1,
+        "num_direct": 0
+      },
+      {
+        "id": 241,
+        "weight": 1,
+        "num_direct": 0
+      }
+    ],
+    "depends": [
+      240,
+      241
+    ],
+    "dependents": [],
+    "type": "NEXTHOP_TYPE_INVALID",
+    "vrf_id": 0,
+    "ifindex": 0,
+    "nh_label_type": "ZEBRA_LSP_NONE",
+    "gate": "::",
+    "src": "::",
+    "rmap_src": "::",
+    "nh_srv6": null
+  },
+  "NHG_FULL_STATE_TABLE:234": {
+    "id": 234,
+    "key": 1200202866,
+    "weight": 1,
+    "flags": 3,
+    "nhg_flags": 1,
+    "ifname": "",
+    "nh_grp_full_list": [],
+    "depends": [],
+    "dependents": [
+      237
+    ],
+    "type": "NEXTHOP_TYPE_IPV6_IFINDEX",
+    "vrf_id": 0,
+    "ifindex": 143,
+    "nh_label_type": "ZEBRA_LSP_NONE",
+    "gate": "fc08::2",
+    "src": "::",
+    "rmap_src": "::",
+    "nh_srv6": null
+  },
+  "NHG_FULL_STATE_TABLE:238": {
+    "id": 238,
+    "key": 4129417754,
+    "weight": 1,
+    "flags": 1,
+    "nhg_flags": 1,
+    "ifname": "",
+    "nh_grp_full_list": [],
+    "depends": [],
+    "dependents": [
+      237
+    ],
+    "type": "NEXTHOP_TYPE_IPV6_IFINDEX",
+    "vrf_id": 0,
+    "ifindex": 140,
+    "nh_label_type": "ZEBRA_LSP_NONE",
+    "gate": "fc06::2",
+    "src": "::",
+    "rmap_src": "::",
+    "nh_srv6": null
+  },
+  "NHG_FULL_STATE_TABLE:237": {
+    "id": 237,
+    "key": 2810095846,
+    "weight": 0,
+    "flags": 0,
+    "nhg_flags": 259,
+    "ifname": "",
+    "nh_grp_full_list": [
+      {
+        "id": 234,
+        "weight": 1,
+        "num_direct": 0
+      },
+      {
+        "id": 238,
+        "weight": 1,
+        "num_direct": 0
+      }
+    ],
+    "depends": [
+      234,
+      238
+    ],
+    "dependents": [],
+    "type": "NEXTHOP_TYPE_INVALID",
+    "vrf_id": 0,
+    "ifindex": 0,
+    "nh_label_type": "ZEBRA_LSP_NONE",
+    "gate": "::",
+    "src": "::",
+    "rmap_src": "::",
+    "nh_srv6": null
+  }
+}
