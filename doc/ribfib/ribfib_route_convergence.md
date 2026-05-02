@@ -39,7 +39,7 @@
 - [Examples](#examples)
   - [Test Topology 1 Global table recursive routes](#test-topology-1-global-table-recursive-routes)
     - [Local Failure fc06::2 withdrawn](#local-failure-fc062-withdrawn)
-    - [Remote Failure 1 (2064:100::1d withdrawn)](#remote-failure-1-20641001d-withdrawn)
+    - [Remote Failure 1 (2064:200::1e withdrawn)](#remote-failure-1-20642001e-withdrawn)
     - [Remote Failure 2 (1::1 withdrawn)](#remote-failure-2-11-withdrawn)
     - [Summary of corrected Topology 1 expectations](#summary-of-corrected-topology-1-expectations)
   - [Test Topology 2 Global table recursive routes](#test-topology-2-global-table-recursive-routes)
@@ -202,13 +202,16 @@ Uses the incoming resolved NHG ID to trigger a backwalk that updates all relevan
 
 It initializes a `fib_nhg_walking_ctx` structure with the following configuration:
 * **Walk context**: It is a json data structure which could store various information during the walk. For example 
-  * An `visited_node_set`. It starts with an empty set. The visited node set would be added later one by one. Each entry tracks a node ID and a boolean flag indicating whether the node was modified during traversal. 
+  * A `visited_node_set`. It starts with an empty set. The visited node set would be added later one by one. Each entry tracks a node ID and a boolean flag indicating whether the node was modified during traversal. 
     * *Note: Even if a node is already present in the visited set, the algorithm may still initiate a forward walk to its dependents to propagate any pending updates.*
+  * A `modified_node_set`. It starts with an empty set. When walk_spec applies a fixup to a node (gateway match or depends propagation), that node ID is added to modified_node_set. Downstream nodes check whether any of their depends entries appear in modified_node_set to determine relevance.
 * **Walk Specification**: Set to `fib_nhg_walk_spec_for_node_quick_fixup` in part 1, which defines the operations to perform on each visited node.
 * **Prune Specification**: Set to `fib_nhg_prune_spec_for_node_quick_fixup` in part 1, which determines whether traversal should terminate at the current node.
 * **Nexthop Address**: The address identifying the impacted routing resource.
 
 Finally, the function initiates the traversal by calling `fib_nhg_back_walk()`, using the resolved NHG ID as the root node.
+
+**Caller-level bypass**: Before calling `fib_nhg_back_walk()` on the dependents, the trigger function first evaluates `walk_spec` on the starting node itself. This is the "caller-level bypass" pattern -- the starting node is always evaluated but never pruned. With route-level NHG semantics, the starting node's gateway always matches the withdrawn nexthop for remote failures, so walk_spec returns `true` and the node gets its `m_resolved_enable_group` updated. The trigger function then iterates the starting node's dependents and calls `fib_nhg_back_walk()` on each. This pattern ensures the starting node is processed even when it would otherwise be pruned by prune_spec.
 
 ### Part 2: VPN Context Backwalk
 Uses the incoming nexthop address to locate all `RIBHNGEntry` instances that reference it across different VPN contexts. The function iterates through each matching entry and triggers a backwalk from that node to update the corresponding SONiC NHGs.
@@ -225,6 +228,7 @@ This function provides a generalized backwalk infrastructure within the `RIBNHGT
 * `ctx` (`fib_nhg_walking_ctx`): A configuration structure containing:
   * `walking_ctx_json` : a json data structure to store various information during the walk.
     * `visited_node_set`: A set tracking visited nodes, where each entry stores a node ID and a boolean flag indicating whether the node was modified during traversal.
+    * `modified_node_set`: A set tracking nodes that were modified by walk_spec (gateway match or depends propagation). Used by downstream nodes to determine relevance.
   * `fib_nhg_walk_spec_func`: A callback function that applies necessary updates to the current node.
   * `fib_nhg_prune_spec_func`: A callback function that determines whether traversal should terminate at the current node.
   * `nexthop_address`: The nexthop address identifying the impacted routing resource.
@@ -237,10 +241,7 @@ While currently utilized for NHG quick fixup operations, this infrastructure is 
 2. **Walk Specification Execution**: Invokes the walk callback (`fib_nhg_walk_spec_func`) on the retrieved entry. This may apply state updates to the object (e.g., marking failed members as inactive).
 3. **Visited State Tracking**: Adds the current node ID and its modification status to `visited_node_set`.
 4. **Prune Evaluation**: Invokes the prune callback (`fib_nhg_prune_spec_func`), passing the return value from the walk callback and a reference to the current `RIBNHGEntry`. The callback determines whether traversal should halt.
-5. **Recursive Traversal**: If pruning is not triggered, the function evaluates continuation conditions:
-   * For **ECMP** nexthops: recursion proceeds unconditionally.
-   * For **single-path** or **recursive** nexthops: recursion proceeds only if the node was modified.
-   * If conditions are met, the function retrieves the dependency list of the current `RIBNHGEntry` and recursively invokes `fib_nhg_back_walk()` for each dependent node.
+5. **Recursive Traversal**: If pruning is not triggered, the function retrieves the dependents list of the current `RIBNHGEntry` and recursively invokes `fib_nhg_back_walk()` for each dependent node. The ECMP vs single-path continuation logic is handled entirely within `prune_spec` -- `fib_nhg_back_walk` itself simply iterates all dependents when not pruned.
 
 ####  Recursion Flowchart
 ```mermaid
@@ -271,7 +272,7 @@ flowchart TD
 ## Changes for Part 1
 ### Changes in  `class RIBNHGEntry`
 * New Field: `m_resolved_enable_group`
-Need to add a new field m_resolved_enable_group to track if resovled NHG is enabled or not.
+Need to add a new field m_resolved_enable_group to track if resolved NHG is enabled or not.
 
 ```
         /*
@@ -279,13 +280,30 @@ Need to add a new field m_resolved_enable_group to track if resovled NHG is enab
          * Contains <ribID, bool> pairs to indicate if the resolved NHG is enabled.
          * - All paths are set as enabled upon Add/Update events from FRR.
          * - Paths are marked as disabled during the backwalk process.
+         * - For leaf NHGs (depends.empty()), a self-reference {self_id, true} is added
+         *   after depends-based population so walk_spec can mark the leaf disabled.
          */
         unordered_map<uint32_t, bool> m_resolved_enable_group;
 ```
+
+**Self-reference initialization**: When populating `m_resolved_enable_group`, iterate the depends list and set each entry to `true`. For leaf NHGs (`depends.empty()`), add `{self_id, true}` as a self-reference so the entry has a state that walk_spec can set to `false` when the gateway matches.
+
 Note: Forward walk calculations are compared against this stored state to determine whether the node requires an update.
 
+* New Field: `m_last_appdb_fields`
+Caches the last APPDB field string written by this entry. Before calling `writeToDB()`, compare the new fields against this cached value. If identical, skip the write (compare-and-skip deduplication).
+
+```
+        /*
+         * Cached APPDB fields for deduplication.
+         * Compared before each writeToDB() to avoid redundant APPDB writes
+         * when the flat resolved paths haven't changed.
+         */
+        string m_last_appdb_fields;
+```
+
 * Method Update: `RIBNHGEntry::getNextHopGroupFields()`
-A validation check is added to exclude paths marked as disabled in `m_resolved_enable_group` from the generated output strings.
+Before recursing into each depends entry in `m_resolvedGroup`, check `m_resolved_enable_group`: if the depends entry is marked `false` (disabled), skip it. This produces the correct flat resolved paths reflecting the current enable/disable state at every level of the dependency chain.
 
 ### `fib_nhg_walk_spec_for_node_quick_fixup()`
 This function provides the Part 1-specific implementation of the `fib_nhg_walk_spec_func` callback. The caller registers this function before initiating the backwalk, ensuring consistent logic across all nodes in a single traversal.
@@ -299,11 +317,11 @@ This function provides the Part 1-specific implementation of the `fib_nhg_walk_s
   2. **Relevance Evaluation**: Determine if the node requires an update by checking:
     * Single-path/Recursive nexthops: Verify if the entry's gateway address matches the impacted nexthop.
     * ECMP nexthops: Gateway address matching is skipped.
-    * **State Comparison (All cases)**: Check whether any dependents have disabled paths in their m_resolved_enable_group that are not yet reflected in the current node's state (i.e., forward walk results differ from the saved state).
+    * **State Comparison (All cases)**: Check whether any depends entries have disabled paths in their m_resolved_enable_group that are not yet reflected in the current node's state (i.e., forward walk results differ from the saved state). Additionally, check if any depends entry appears in modified_node_set.
   3. **State Propagation**: If an update is required:
      * Iterate through the depends list.
-     * Retrieve each dependent RIBNHGEntry via getEntry().
-     * Identify disabled paths in the dependent's m_resolved_enable_group.
+     * Retrieve each depends entry's RIBNHGEntry via getEntry().
+     * Identify disabled paths in the depends entry's m_resolved_enable_group.
      * Mark the corresponding paths as disabled in the current node's m_resolved_enable_group.
   4. **Database Synchronization**: Invoke `getNextHopGroupFields()` on the current entry, which triggers `writeToDB()` to update APPDB with the remaining enabled paths. This finalizes the quick fixup for the node. Exception: APPDB updates are skipped if the path is the sole remaining member and is being disabled.
 * Walk Spec Decision Flowchart
@@ -391,7 +409,7 @@ sequenceDiagram
         Note over WSpec: See Section Walk Spec Decision Flowchart
         WSpec->>Entry: get depends list
         WSpec->>Entry: evaluate m_resolved_enable_group<br/>(Visit-for-State)
-        WSpec->>WSpec: Check relevance:<br/>(a) gateway match + unreachable<br/>(b) depends in modified_node_set
+        WSpec->>WSpec: Check relevance:<br/>(a) gateway match<br/>(b) depends in modified_node_set
 
         alt Relevant (fixup needed)
             WSpec->>Entry: update m_resolved_enable_group
@@ -411,9 +429,7 @@ sequenceDiagram
 
         Walk->>Entry: get dependents list
         loop For each dependent_id
-            alt dependent_id not in visited_node_set
-                Walk->>Walk: recurse(dependent_id, ctx)
-            end
+            Walk->>Walk: recurse(dependent_id, ctx)
         end
     end
 ```
@@ -641,37 +657,42 @@ Above graph could be presented as the following table
 | 262 | route 3::3 | composite | [263, 264] | -- | {263: true, 264: true} |
 ### Local Failure fc06::2 withdrawn
 The NHT event contains "nexthop=fc06::2, resolved_nhg_id=237". 
-FIB triggers the recursive walk via the following order from 237, 237 → 238 → 257 → 258 → 263 → 264 → 256 → 262 (234 never reached -- not in backwalk path from 237)
+FIB triggers the recursive walk via DFS from 237: `237 → 238 → 257 → 256 → 258 → 256 (revisit) → 263 → 262 → 264 → 262 (revisit)` (234 never reached -- not in backwalk path from 237)
 
-The detailed handling procedure is the following and the initial modified_set is emptry.
+The detailed handling procedure is the following and the initial modified_set is empty.
 1. 237 (STARTING, leaf fc06::2):
-  * Match nexthop. Since currently it is up, we need to disable it. Skip APPDB update since it is a single path. Since matching nexthop, Set a flag to indicate all its dependents would be updated, a.k.a skip nexthop check. 
-  * modified_set += {237, true}. True in modified_set indicates this node 237 is modified.
+  * Gateway matches nexthop. Self-ref disabled: `{237: false}`. Skip APPDB (single path).
+  * `modified_set += 237`.
 2. 238 (ECMP, depends [234, 237]):
-  * It is ECMP case, check both paths. 237 is marked as modified.
-  * 237 fully disabled → mark 238's m_resolved_enable_group as {234: true, 237: false}.
-  * Flat: {fc08::2}. APPDB written. modified_set += {238, true}.
+  * 237 in modified_set → relevant. 237 fully disabled → mark: `{234: true, 237: false}`.
+  * Flat: `{fc08::2}`. APPDB written. `modified_set += 238`.
 3. 257 (2064:100::1d, depends [238]):
-  * 238 in modified_set and is marked as modified.
-  * Flat: 257 → {fc08::2}. APPDB: {fc08::2}. modified_set += {257, true}.
-4. 258 (2064:200::1e, depends [238]):
-  * 238 in modified_set and is marked as modified.
-  * Flat: 258 → {fc08::2}. APPDB: {fc08::2}. modified_set += {258, true}.
-5. 263 (1::1, depends [238]):
-  * 238 in modified_set and is marked as modified
-  * Flat: 263 → {fc08::2}. APPDB: {fc08::2}. modified_set += {263, true}.
-6. 264 (2::2, depends [238]):
-  * 238 in modified_set and is marked as modified
-  * Flat: 264 → {fc08::2}. APPDB: {fc08::2}. modified_set += {264, true}.
-7. 256 (For route 1::1, depends [257, 258]):
-  * Since both 257 and 258 are in modified_set and is marked as modified
-  * Flat: 256 → {fc08::2}. APPDB: {fc08::2}. modified_set += {256, true}.
-8. 262 (For route 3::3, depends [263, 264]):
-  * Since both 263 and 264 are in modified_set and is marked as modified
-  * Flat: 262 → {fc08::2}. APPDB: {fc08::2}. modified_set += {262, true}.
+  * 238 in modified_set → relevant. No gateway match (2064:100::1d != fc06::2).
+  * Flat: 238 → `{fc08::2}`. APPDB: `{fc08::2}`. `modified_set += 257`.
+4. 256 (route 1::1, depends [257, 258]):
+  * 257 in modified_set → relevant.
+  * Flat: 257→238→`{fc08::2}`, 258→238→`{fc08::2}`. APPDB: `{fc08::2}`. `modified_set += 256`.
+5. 258 (2064:200::1e, depends [238]):
+  * 238 in modified_set → relevant.
+  * Flat: 238 → `{fc08::2}`. APPDB: `{fc08::2}`. `modified_set += 258`.
+6. 256 (revisit, depends [257, 258]):
+  * 258 now also in modified_set. Regen: same `{fc08::2}`. APPDB same (compare-and-skip).
+7. 263 (1::1, depends [238]):
+  * 238 in modified_set → relevant.
+  * Flat: 238 → `{fc08::2}`. APPDB: `{fc08::2}`. `modified_set += 263`.
+8. 262 (route 3::3, depends [263, 264]):
+  * 263 in modified_set → relevant.
+  * Flat: 263→238→`{fc08::2}`, 264→238→`{fc08::2}`. APPDB: `{fc08::2}`. `modified_set += 262`.
+9. 264 (2::2, depends [238]):
+  * 238 in modified_set → relevant.
+  * Flat: 238 → `{fc08::2}`. APPDB: `{fc08::2}`. `modified_set += 264`.
+10. 262 (revisit, depends [263, 264]):
+  * 264 now also in modified_set. Regen: same `{fc08::2}`. APPDB same (compare-and-skip).
 
 The final result:
-* Updated nodes: {237, 238, 257, 258, 263, 264, 256, 262} all updated.
+* **APPDB Updated**: {238, 257, 258, 263, 264, 256, 262}
+* **State Modified (skip APPDB)**: {237}
+* **Not Reached**: {234}
 
 
 **Call flow trace through the sequence diagram**:
@@ -888,7 +909,7 @@ Above graph could be presented as the following table
 ### Local Failure (`fc06::2` withdrawn)
 **NHT:** `nexthop=fc06::2`, `resolved_nhg_id=235`
 
-**DFS order from 235:** `235 → 236 → 266 → 260  → 264  → 263 → 269`  
+**DFS order from 235:** `235 → 236 → 260 → 263 → 264 → 263 (revisit) → 266 → 269`  
 *(270, 232 never reached -- not in backwalk path from 235)*
 
 1. **235** (STARTING, leaf `fc06::2`):
@@ -897,23 +918,24 @@ Above graph could be presented as the following table
    - Gateway `fc06::2` matches. `235` in `modified_set`.
    - `235` fully disabled → mark: `{232: true, 235: false}`.
    - Flat: `{fc08::2}`. APPDB written. `modified_set += 236`.
-3. **266** (via `3::3`, depends `[235]`):
-   - `235` in `modified_set` → relevant!
-   - `235` fully disabled → mark: `{235: false}`. Fully disabled. Skip APPDB.
-   - `modified_set += 266`. Continue to `[269]`.
-4. **260** (`2064:100::1d`, depends `[236]`):
+3. **260** (`2064:100::1d`, depends `[236]`):
    - `236` in `modified_set` → relevant!
    - `236` partially disabled → NOT marked disabled.
    - Flat: `236 → {fc08::2}`. APPDB: `{fc08::2}`. `modified_set += 260`.
-5. **264** (`2064:200::1e`, depends `[236]`):
-   - `236` in `modified_set` → relevant!
-   - Flat: `236 → {fc08::2}`. APPDB: `{fc08::2}`. `modified_set += 264`.
-   - Dependent `[263]` already visited.
-6. **263** (route 1::1, depends `[260, 264]`):
+4. **263** (route 1::1, depends `[260, 264]`):
    - `260` in `modified_set` → relevant!
    - Flat: `260 → 236 → {fc08::2}`. `264 → 236 → {fc08::2}`. Dedup: `{fc08::2}`.
    - APPDB: `{fc08::2}`. `modified_set += 263`.
-7. **269** (route 4::4, depends `[266, 270]`):
+5. **264** (`2064:200::1e`, depends `[236]`):
+   - `236` in `modified_set` → relevant!
+   - Flat: `236 → {fc08::2}`. APPDB: `{fc08::2}`. `modified_set += 264`.
+6. **263** (revisit, route 1::1, depends `[260, 264]`):
+   - `264` now also in `modified_set` → relevant. Regen: same `{fc08::2}`. APPDB same (compare-and-skip).
+7. **266** (via `3::3`, depends `[235]`):
+   - `235` in `modified_set` → relevant!
+   - `235` fully disabled → mark: `{235: false}`. Fully disabled. Skip APPDB.
+   - `modified_set += 266`. Continue to `[269]`.
+8. **269** (route 4::4, depends `[266, 270]`):
    - `266` in `modified_set` → relevant!
    - `266` fully disabled → mark: `{266: false, 270: true}`.
    - Flat: `270` (enabled) → `232 → {fc08::2}`. APPDB: `{fc08::2}`.
@@ -1148,12 +1170,12 @@ graph TD
 * Trigger: An NHT event is generated containing the nexthop address fc06::2 and the corresponding NHG ID 238.
 * Expected Result:
   * Part 1 starting from node 238
-    1. **235** (STARTING, leaf `fc06::2`):
-        - Match. Self-ref disabled. Skip APPDB. `modified_set += 235`.
-    2. **237** (ECMP, depends `[232, 235]`):
-        - Gateway `fc06::2` matches. `235` in `modified_set`.
-        - `235` fully disabled → mark: `{232: true, 235: false}`.
-        - Flat: `{fc08::2}`. APPDB written. `modified_set += 236`.
+    1. **238** (STARTING, leaf `fc06::2`):
+        - Match. Self-ref disabled. Skip APPDB. `modified_set += 238`.
+    2. **237** (ECMP, depends `[234, 238]`):
+        - Gateway `fc06::2` matches. `238` in `modified_set`.
+        - `238` fully disabled → mark: `{234: true, 238: false}`.
+        - Flat: `{fc08::2}`. APPDB written. `modified_set += 237`.
   * Part 2 starting from fc06::2
     _ no match for fc06::2 in m_nexthop_to_RIBNHG_map
 
@@ -1174,14 +1196,14 @@ Part 2 (VPN Context): Lookup fc06::2 in `m_nexthop_to_RIBNHG_map` -> **no match*
 * Expected Result:
   * Part 1 starting from node 237
     - No update
-  * Part 1 starting from node 2064:100::1d
+  * Part 2 starting from nexthop 2064:100::1d
     - Find NHG node 240 from  m_nexthop_to_RIBNHG_map, trigger fib_nhg_back_walk from this node
     1. **240** (STARTING, leaf `2064:100::1d`):
         - Match. Self-ref disabled. Skip APPDB. `modified_set += 240`.
     2. **239** (ECMP, depends `[240, 241]`):
-        -  `235` in `modified_set`.
+        -  `240` in `modified_set`.
         - `240` fully disabled → mark: `{241: true, 240: false}`.
-        - Update SONiC NHG from node 230: `{2064:200::1e}`. APPDB written. `modified_set += 239`.  
+        - Update SONiC NHG from node 239: `{2064:200::1e}`. APPDB written. `modified_set += 239`.  
 
 **Call flow trace**:
 
