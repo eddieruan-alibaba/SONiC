@@ -14,6 +14,10 @@
     - [Event Generation Workflow](#event-generation-workflow)
   - [FPM Message Serialization (SONiC Integration)](#fpm-message-serialization-sonic-integration)
 - [SONiC-fib Enhancements for NHT events](#sonic-fib-enhancements-for-nht-events)
+  - [NhtEvent JSON Schema](#nhtevent-json-schema)
+  - [Generated Code](#generated-code)
+  - [C API for FRR Integration](#c-api-for-frr-integration)
+  - [Data Flow](#data-flow)
 - [FPMsyncd Modifications](#fpmsyncd-modifications)
   - [Existing NHG MGR codes](#existing-nhg-mgr-codes)
   - [`fib_nhg_trigger_node_quick_fixup()`](#fib_nhg_trigger_node_quick_fixup)
@@ -177,8 +181,80 @@ case DPLANE_OP_NHT_EVENT_UPDATE:
 The FPM message format for NHT_EVENT_UPDATE must be defined in the sonic-fib interface definition, ensuring alignment between FRR's dplane output and fpmsyncd's ingestion logic.
 
 # SONiC-fib Enhancements for NHT events
-TODO: define a new schema for NHT events.
+A new JSON schema `NhtEvent.json` is added to the [sonic-fib](https://github.com/eddieruan-alibaba/sonic-fib) repository, following the same template-driven generation pattern as `NextHopGroupFull.json`.
 
+## NhtEvent JSON Schema
+
+The schema captures the full `dplane_rnh_info` payload so that future phases need no wire-format changes.
+
+| Field | JSON Type | Description | Unresolved Value |
+|:---|:---|:---|:---|
+| `rnh_prefix` | string (addr/len) | Tracked RNH prefix, e.g. `2064:100::1d/128` | — |
+| `prev_resolved_prefix` | string (addr/len) | Previous resolving route prefix | `0.0.0.0/0` or `::/0` |
+| `prev_resolved_nhg_id` | integer | Previous resolving NHG identifier | 0 |
+| `curr_resolved_prefix` | string (addr/len) | Current resolving route prefix | `0.0.0.0/0` or `::/0` |
+| `curr_resolved_nhg_id` | integer | Current resolving NHG identifier | 0 |
+
+Prefix strings use `addr/len` notation. All 5 fields are required.
+
+### Example: nexthop becomes unresolved (Phase 1 trigger)
+
+```json
+{
+  "rnh_prefix": "2064:200::1e/128",
+  "prev_resolved_prefix": "2064:200::1e/128",
+  "prev_resolved_nhg_id": 258,
+  "curr_resolved_prefix": "::/0",
+  "curr_resolved_nhg_id": 0
+}
+```
+
+Phase 1 uses `rnh_prefix` (converted to nexthop address) and `prev_resolved_nhg_id` when `curr_resolved_nhg_id == 0`.
+
+## Generated Code
+
+The Jinja2 template pipeline generates four files from `schema/NhtEvent.json`:
+
+| Generated File | Purpose |
+|:---|:---|
+| `src/nhtevent.h` / `src/nhtevent.cpp` | C++ `fib::NhtEvent` struct with constructors, copy/move, equality operators |
+| `src/nhtevent_json.h` | `to_json_string()`, `nhtevent_from_json()`, `nhtevent_from_json_string()` via nlohmann/json |
+| `src/c_nhtevent.h` | C struct `C_NhtEvent` with fixed-size char arrays (64 bytes per prefix) for FRR |
+
+## C API for FRR Integration
+
+New files `src/c-api/nhtevent_capi.h` and `src/c-api/nhtevent_capi.cpp` provide:
+
+```c
+/* Encode: C_NhtEvent -> JSON string (caller must free()) */
+char* nhtevent_json_from_c_nht(const struct C_NhtEvent* c_nht);
+```
+
+FRR's `fpm_nl_enqueue()` calls `nhtevent_json_from_c_nht()` in the `DPLANE_OP_NHT_EVENT_UPDATE` case to serialize the event before sending over the FPM socket. fpmsyncd deserializes via `nhtevent_from_json_string()`.
+
+## Data Flow
+
+```
+FRR (C)                        sonic-fib                      fpmsyncd (C++)
+-----------                    ---------                      --------------
+dplane_rnh_info
+  |
+  v
+fpm_nl_enqueue()
+  DPLANE_OP_NHT_EVENT_UPDATE
+  |
+  +-> nhtevent_json_from_c_nht() -> JSON string -> FPM socket
+                                                      |
+                                                      v
+                                     nhtevent_from_json_string() -> fib::NhtEvent
+                                                                       |
+                                                                       v
+                                                   fib_nhg_trigger_node_quick_fixup(
+                                                       nexthop_addr,
+                                                       prev_resolved_nhg_id)
+```
+
+Full design details are in `docs/alinos/specs/2026-05-02-nht-event-schema-design.md`.
 
 # FPMsyncd Modifications
 The input data for this NHT event is detailed in the preceding sections. Under the Phase 1 approach, FPMsyncd will invoke fib_nhg_trigger_node_quick_fixup() when current_resolved_nhg_id is zero, indicating that the tracked nexthop address cannot be resolved. Additional scenarios will be addressed in future updates.
