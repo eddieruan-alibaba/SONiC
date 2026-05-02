@@ -187,7 +187,7 @@
     "dependents": [
       262
     ],
-    "type": "NEXTHOP_TYPE_IPv6",
+    "type": "NEXTHOP_TYPE_IPV6",
     "vrf_id": 0,
     "ifindex": 0,
     "nh_label_type": "ZEBRA_LSP_NONE",

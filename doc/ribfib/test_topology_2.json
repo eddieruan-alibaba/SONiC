@@ -99,11 +99,11 @@
     "dependents": [
       269
     ],
-    "type": "NEXTHOP_TYPE_INVALID",
+    "type": "NEXTHOP_TYPE_IPV6",
     "vrf_id": 0,
     "ifindex": 0,
     "nh_label_type": "ZEBRA_LSP_NONE",
-    "gate": "::",
+    "gate": "2::2",
     "src": "::",
     "rmap_src": "::",
     "nh_srv6": null
@@ -128,11 +128,11 @@
     "dependents": [
       269
     ],
-    "type": "NEXTHOP_TYPE_INVALID",
+    "type": "NEXTHOP_TYPE_IPV6",
     "vrf_id": 0,
     "ifindex": 0,
     "nh_label_type": "ZEBRA_LSP_NONE",
-    "gate": "::",
+    "gate": "3::3",
     "src": "::",
     "rmap_src": "::",
     "nh_srv6": null
@@ -167,11 +167,11 @@
     "dependents": [
       263
     ],
-    "type": "NEXTHOP_TYPE_INVALID",
+    "type": "NEXTHOP_TYPE_IPV6",
     "vrf_id": 0,
     "ifindex": 0,
     "nh_label_type": "ZEBRA_LSP_NONE",
-    "gate": "::",
+    "gate": "2064:100::1d",
     "src": "::",
     "rmap_src": "::",
     "nh_srv6": null
@@ -206,11 +206,11 @@
     "dependents": [
       263
     ],
-    "type": "NEXTHOP_TYPE_INVALID",
+    "type": "NEXTHOP_TYPE_IPV6",
     "vrf_id": 0,
     "ifindex": 0,
     "nh_label_type": "ZEBRA_LSP_NONE",
-    "gate": "::",
+    "gate": "2064:200::1e",
     "src": "::",
     "rmap_src": "::",
     "nh_srv6": null
