@@ -26,23 +26,15 @@
       - [Recursion Flowchart](#recursion-flowchart)
   - [Changes for Part 1](#changes-for-part-1)
     - [Changes in  `class RIBNHGEntry`](#changes-in--class-ribnhgentry)
-      - [New Field: `m_resolved_enable_group`](#new-field-m_resolved_enable_group)
-      - [Method Update: `RIBNHGEntry::getNextHopGroupFields()`](#method-update-ribnhgentrygetnexthopgroupfields)
     - [`fib_nhg_walk_spec_for_node_quick_fixup()`](#fib_nhg_walk_spec_for_node_quick_fixup)
-      - [Execution Logic:](#execution-logic)
-      - [Walk Spec Decision Flowchart](#walk-spec-decision-flowchart)
     - [`fib_nhg_prune_spec_for_node_quick_fixup()`](#fib_nhg_prune_spec_for_node_quick_fixup)
-      - [Prune Logic:](#prune-logic)
     - [Part 1's call flow](#part-1s-call-flow)
   - [Changes for Part 2](#changes-for-part-2)
     - [Motivation](#motivation)
     - [Modifications to `RIBNHGTable` Class](#modifications-to-ribnhgtable-class)
-      - [New Field: `m_nexthop_to_RIBNHG_map`](#new-field-m_nexthop_to_ribnhg_map)
-      - [Supporting APIs](#supporting-apis)
-      - [Integration Points](#integration-points)
     - [Backwalk for VPN-Scoped RIBNHGEntries](#backwalk-for-vpn-scoped-ribnhgentries)
-      - [`fib_nhg_walk_spec_for_node_quick_fixup_sonic_nhg()`](#fib_nhg_walk_spec_for_node_quick_fixup_sonic_nhg)
-      - [`fib_nhg_prune_spec_for_node_quick_fixup_sonic_nhg()`](#fib_nhg_prune_spec_for_node_quick_fixup_sonic_nhg)
+    - [`fib_nhg_walk_spec_for_node_quick_fixup_sonic_nhg()`](#fib_nhg_walk_spec_for_node_quick_fixup_sonic_nhg)
+    - [`fib_nhg_prune_spec_for_node_quick_fixup_sonic_nhg()`](#fib_nhg_prune_spec_for_node_quick_fixup_sonic_nhg)
     - [Part 2's call flow](#part-2s-call-flow)
 - [Examples](#examples)
   - [Test Topology 1 Global table recursive routes](#test-topology-1-global-table-recursive-routes)
@@ -81,6 +73,7 @@ Key refinements identified during LLM-assisted brainstorming:
 * **Intermediate Verification**: The LLM can emit step-by-step intermediate states to validate the correctness of recursive call outcomes.
 * **Idempotency Clarification**: The LLM flagged a potential idempotency concern, prompting us to explicitly scope Phase 1 support to RNH transitions only into the unresolved state.
 * **Trace-Driven Validation**: The LLM generates structured call flow trace artifacts and can cross-validate them against the step-by-step intermediate results to ensure behavioral consistency.
+* **topology json error**: Flagged topology json error with missing nexthop type and gate in topology 2's json after LLM comparing LLD with json file file.
 
 # FRR Modifications
 This section outlines modifications to FRRouting (FRR) to enhance Next Hop Tracking (NHT) event propagation from Zebra to the dplane, enabling fpmsyncd to respond proactively to nexthop changes and minimize traffic loss during convergence.
@@ -277,7 +270,7 @@ flowchart TD
 
 ## Changes for Part 1
 ### Changes in  `class RIBNHGEntry`
-#### New Field: `m_resolved_enable_group`
+* New Field: `m_resolved_enable_group`
 Need to add a new field m_resolved_enable_group to track if resovled NHG is enabled or not.
 
 ```
@@ -291,7 +284,7 @@ Need to add a new field m_resolved_enable_group to track if resovled NHG is enab
 ```
 Note: Forward walk calculations are compared against this stored state to determine whether the node requires an update.
 
-#### Method Update: `RIBNHGEntry::getNextHopGroupFields()`
+* Method Update: `RIBNHGEntry::getNextHopGroupFields()`
 A validation check is added to exclude paths marked as disabled in `m_resolved_enable_group` from the generated output strings.
 
 ### `fib_nhg_walk_spec_for_node_quick_fixup()`
@@ -301,21 +294,19 @@ This function provides the Part 1-specific implementation of the `fib_nhg_walk_s
 * Output: bool indicating traversal continuation.
   * true: Fixup succeeded; backwalk should continue from this node.
   * false: Fixup was unnecessary or failed; backwalk halts. Returns false if the NHG is unrelated to the impacted nexthop or has already been updated.
-
-#### Execution Logic:
-1. **Dependency Retrieval**: Fetch the list of node IDs that the current entry depends on.
-2. **Relevance Evaluation**: Determine if the node requires an update by checking:
-  * Single-path/Recursive nexthops: Verify if the entry's gateway address matches the impacted nexthop.
-  * ECMP nexthops: Gateway address matching is skipped.
-  * **State Comparison (All cases)**: Check whether any dependents have disabled paths in their m_resolved_enable_group that are not yet reflected in the current node's state (i.e., forward walk results differ from the saved state).
-3. **State Propagation**: If an update is required:
-   * Iterate through the depends list.
-   * Retrieve each dependent RIBNHGEntry via getEntry().
-   * Identify disabled paths in the dependent's m_resolved_enable_group.
-   * Mark the corresponding paths as disabled in the current node's m_resolved_enable_group.
-4. **Database Synchronization**: Invoke `getNextHopGroupFields()` on the current entry, which triggers `writeToDB()` to update APPDB with the remaining enabled paths. This finalizes the quick fixup for the node. Exception: APPDB updates are skipped if the path is the sole remaining member and is being disabled.
-
-#### Walk Spec Decision Flowchart
+* Execution Logic:
+  1. **Dependency Retrieval**: Fetch the list of node IDs that the current entry depends on.
+  2. **Relevance Evaluation**: Determine if the node requires an update by checking:
+    * Single-path/Recursive nexthops: Verify if the entry's gateway address matches the impacted nexthop.
+    * ECMP nexthops: Gateway address matching is skipped.
+    * **State Comparison (All cases)**: Check whether any dependents have disabled paths in their m_resolved_enable_group that are not yet reflected in the current node's state (i.e., forward walk results differ from the saved state).
+  3. **State Propagation**: If an update is required:
+     * Iterate through the depends list.
+     * Retrieve each dependent RIBNHGEntry via getEntry().
+     * Identify disabled paths in the dependent's m_resolved_enable_group.
+     * Mark the corresponding paths as disabled in the current node's m_resolved_enable_group.
+  4. **Database Synchronization**: Invoke `getNextHopGroupFields()` on the current entry, which triggers `writeToDB()` to update APPDB with the remaining enabled paths. This finalizes the quick fixup for the node. Exception: APPDB updates are skipped if the path is the sole remaining member and is being disabled.
+* Walk Spec Decision Flowchart
 
 ```mermaid
 flowchart TD
@@ -351,11 +342,20 @@ This function implements the Part 1-specific `fib_nhg_prune_spec_func` callback.
   * Reference to the current `RIBNHGEntry` node.
   * Boolean return value from the walk spec function.
 * Output: bool indicating whether to prune (halt) the backwalk at this node.
+* Prune logic
+```
+fib_nhg_prune_spec_for_node_quick_fixup(entry, walk_result):
+    // Rule 1: Multi-path nodes where nexthop wasn't matched always continue --
+    //         dependents above may have gateways matching the nexthop
+    if entry.depends.size() >= 2 and walk_result == false:
+        return false   // don't prune
 
-#### Prune Logic:
-* If it is ECMP nexthops and nexthop hasn't been matched, we would always trigger backwalk.
-* No Update: If the walk spec did not modify the node, halt the backwalk (no further propagation is needed).
+    // Rule 2: No update means no propagation needed
+    if walk_result == false:
+        return true    // prune
 
+    return false       // node was modified, continue
+```
 ### Part 1's call flow
 ```mermaid
 sequenceDiagram
@@ -423,12 +423,12 @@ sequenceDiagram
 `RIBNHGEntry` objects used to create SONiC NHG table entries carry VPN context information, whereas NHT-resolved NHGs from Zebra do not. Consequently, a standard backwalk traversal cannot naturally reach these VPN-scoped entries. To bridge this gap, we introduce an explicit lookup mechanism.
 
 ### Modifications to `RIBNHGTable` Class
-#### New Field: `m_nexthop_to_RIBNHG_map`
+* New Field: `m_nexthop_to_RIBNHG_map`
 A new index is added to map a nexthop address string to the set of `RIBNHGEntry*` pointers that reference it:
 ```
     std::map<std::string, std::set<RIBNHGEntry*>> m_nexthop_to_RIBNHG_map;
 ```
-#### Supporting APIs
+* Supporting APIs
 Three helper methods manage this mapping:
 ```
    void addEntry(const std::string& nexthop, RIBNHGEntry* entry) {
@@ -459,19 +459,19 @@ Three helper methods manage this mapping:
         return it != m_nexthop_to_RIBNHG_map.end() ? it->second : emptySet;
     }
 ```
-#### Integration Points
+* Integration Points
 * `addEntry()` would be used in `NHGMgr::addNewNHGFull()` when `entry->needCreateSonicObject()` returns true
 * `removeEntry()` would be used in `NHGMgr::delNHGFull()` when `entry->hasSonicGatewayObj()` returns true.
 
 ### Backwalk for VPN-Scoped RIBNHGEntries
 For each `RIBNHGEntry*` returned by `getEntries(nexthop)`, we explicitly trigger `fib_nhg_back_walk()` to propagate state changes.
 
-#### `fib_nhg_walk_spec_for_node_quick_fixup_sonic_nhg()`
+### `fib_nhg_walk_spec_for_node_quick_fixup_sonic_nhg()`
 This variant of the walk spec function is tailored for SONiC NHG updates:
 1. **Scope-Limited Updates**: Only modifies the SONiC NHG representation within the RIBNHGEntry; no changes are made to the PIC (Platform Independent Context) state.
 2. **Deduplication Tracking**: Since multiple `RIBNHGEntry` instances may map to a single SONiC NHG (many-to-one relationship), a new JSON field `updated_sonic_nhg_keys` is added to `walking_ctx_json`. This tracks which SONiC NHG keys have already been updated during the traversal to avoid redundant APPDB writes.
 
-#### `fib_nhg_prune_spec_for_node_quick_fixup_sonic_nhg()`
+### `fib_nhg_prune_spec_for_node_quick_fixup_sonic_nhg()`
 This prune spec function currently mirrors the behavior of f`ib_nhg_prune_spec_for_node_quick_fixup()`:
 * Halts traversal if the node was not modified by the walk spec.
 
