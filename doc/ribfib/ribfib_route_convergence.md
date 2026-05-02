@@ -689,82 +689,68 @@ The final result:
 | 9 | back_walk(264) | Depends [238]. 238 in modified_set -> relevant. Regen via 238 -> {fc08::2}. | true | not pruned | yes -> dependents=[262] | 264: {fc08::2} | {237,238,257,256,258,263,262,264} |
 | 10 | back_walk(262) | **Revisit**. Depends [263,264]. 264 now also in modified_set. Regen: same {fc08::2}. | true | not pruned | yes -> dependents=[] | 262: {fc08::2} (same) | {237,238,257,256,258,263,262,264} |
 
-### Remote Failure 1 (2064:100::1d withdrawn)
-The NHT event contains "nexthop=2064:100::1d, resolved_nhg_id=238". 
-FIB triggers the recursive walk via the following order from 238, 238 → 257 → 258 → 263 → 264 → 256
+### Remote Failure 1 (2064:200::1e withdrawn)
+The NHT event contains "nexthop=2064:200::1e, resolved_nhg_id=258" (route-level NHG, gateway 2064:200::1e).
+FIB triggers the recursive walk starting at 258.
 
-The detailed handling procedure is the following and the initial modified_set is emptry.
-1. 238 (STARTING ECMP, depends [234, 237]):
-  * It is ECMP case. continue backwalk. No need to update current node. modified_set += {238, false}.
-2. 257 (2064:100::1d, depends [238]):
-  * Match nexthop. Since currently it is up, we need to disable it. Skip APPDB update since it is a single path.
-  * modified_set += {257, true}.
-3. 258 (2064:200::1e, depends [238]):
-  * No match nexthop, prune the walk from there. modified_set += {258, false}.
-4. 263 (1::1, depends [238]):
-  * No match nexthop, prune the walk from there. modified_set += {263, false}.
-5. 264 (2::2, depends [238]):
-  * No match nexthop, prune the walk from there. modified_set += {264, false}.
-6. 256 (For route 1::1, depends [257, 258]):
-  * Since 257 is in modified_set and it is marked as modified. Need to update 256's APPDB
-  * Flat: 257 → {fc06::2, fc08::2}. APPDB: {fc06::2, fc08::2}. modified_set += {256, true}.
+1. **258** (STARTING, gateway `2064:200::1e`):
+   - Gateway matches nexthop. Caller-level bypass: evaluate walk_spec but never prune.
+   - Disable all depends: `{238: false}`. Single depend, fully disabled -> skip APPDB.
+   - `modified_set = {258}`. Continue to dependents `[256]`.
+2. **256** (route 1::1, depends `[257, 258]`):
+   - `258` in `modified_set` -> relevant!
+   - `258` fully disabled -> mark: `{257: true, 258: false}`.
+   - Regen: `257 -> 238 -> {fc06::2, fc08::2}`. APPDB: `{fc06::2, fc08::2}`.
+   - `modified_set += 256`. Dependents=[] -> end.
 
 The final result:
-* Updated nodes: {257, 256}
+* **APPDB Updated**: {256}
+* **State Modified (skip APPDB)**: {258}
+* **Not Reached**: {234, 237, 238, 257, 263, 264, 262}
 
-**Call flow trace**:
+**Call flow trace (with caller-level bypass)**:
 
-| Step | back_walk call | walk_spec evaluation | walk_spec result | prune_spec | Continue? | APPDB | modified_node_set after |
-|:-----|:---------------|:---------------------|:-----------------|:-----------|:----------|:------|:------------------------|
-| 1 | back_walk(238) | ECMP. Depends [234,237]. Both enabled -> no state change. No gateway match (ECMP has no overlay gateway). No depends in modified_set (empty). | false | **ECMP + not matched -> don't prune** | yes -> dependents=[257,258,263,264] | -- | {} |
-| 2 | back_walk(257) | Depends [238]. 238 NOT fully disabled, stays enabled. Gateway 2064:100::1d != 2064:200::1e -> no match. 238 NOT in modified_set. | false | **pruned** (not modified, not ECMP) | no | -- | {} |
-| 3 | back_walk(258) | Depends [238]. 238 stays enabled. Gateway 2064:200::1e == nexthop -> **match**. Mark all depends disabled: {238: false}. Single depend, fully disabled -> skip APPDB. | true | not pruned | yes -> dependents=[256] | -- | {258} |
-| 4 | back_walk(256) | Depends [257,258]. 258 fully disabled -> mark {257:true, 258:false} in m_resolved_enable_group. 258 in modified_set -> relevant. Regen: 257->{fc06::2, fc08::2} (via 238, all enabled). | true | not pruned | yes -> dependents=[] | 256: {fc06::2, fc08::2} | {258,256} |
-| 5 | back_walk(263) | Depends [238]. 238 enabled. Gateway 1::1 != 2064:200::1e. 238 NOT in modified_set. | false | **pruned** | no | -- | {258,256} |
-| 6 | back_walk(264) | Depends [238]. 238 enabled. Gateway 2::2 != 2064:200::1e. 238 NOT in modified_set. | false | **pruned** | no | -- | {258,256} |
+| Step | Action | walk_spec evaluation | walk_spec result | prune_spec | APPDB | modified_node_set after |
+|:-----|:-------|:---------------------|:-----------------|:-----------|:------|:------------------------|
+| 0 | Caller: walk_spec(258) | Gateway 2064:200::1e == nexthop -> **match**. Disable all depends: {238: false}. Single depend, fully disabled -> skip APPDB. | true | bypassed | -- | {258} |
+| 1 | back_walk(256) | Depends [257, 258]. 258 fully disabled -> mark {257:true, 258:false}. 258 in modified_set -> relevant. Regen: 257->{fc06::2, fc08::2} (via 238, all enabled). | true | not pruned | 256: {fc06::2, fc08::2} | {258, 256} |
+| | 256 dependents=[] -> end | | | | | |
 
 
 ### Remote Failure 2 (1::1 withdrawn)
-The NHT event contains "nexthop=1::1, resolved_nhg_id=238". 
-FIB triggers the recursive walk via the following order from 238, 238 → 257 → 258 → 263 → 264 → 262
+The NHT event contains "nexthop=1::1, resolved_nhg_id=263" (route-level NHG, gateway 1::1).
+FIB triggers the recursive walk starting at 263.
 
-The detailed handling procedure is the following and the initial modified_set is emptry.
-1. 238 (STARTING ECMP, depends [234, 237]):
-  * It is ECMP case. continue backwalk. No need to update current node. modified_set += {238, false}.
-2. 257 (2064:100::1d, depends [238]):
-  * No match nexthop, prune the walk from there. modified_set += {257, false}.
-3. 258 (2064:200::1e, depends [238]):
-  * No match nexthop, prune the walk from there. modified_set += {258, false}.
-4. 263 (1::1, depends [238]):
-  * Match nexthop. Since currently it is up, we need to disable it. Skip APPDB update since it is a single path.
-  * modified_set += {263, true}.
-5. 264 (2::2, depends [238]):
-  * No match nexthop, prune the walk from there. modified_set += {264, false}.
-6. 262 (For route 3::3, depends [263, 264]):
-  * Since 263 is in modified_set and it is marked as modified. Need to update 262's APPDB
-  * Flat: 262 → {fc06::2, fc08::2}. APPDB: {fc06::2, fc08::2}. modified_set += {262, true}.
+1. **263** (STARTING, gateway `1::1`):
+   - Gateway matches nexthop. Caller-level bypass: evaluate walk_spec but never prune.
+   - Disable all depends: `{238: false}`. Single depend, fully disabled -> skip APPDB.
+   - `modified_set = {263}`. Continue to dependents `[262]`.
+2. **262** (route 3::3, depends `[263, 264]`):
+   - `263` in `modified_set` -> relevant!
+   - `263` fully disabled -> mark: `{263: false, 264: true}`.
+   - Regen: `264 -> 238 -> {fc06::2, fc08::2}`. APPDB: `{fc06::2, fc08::2}`.
+   - `modified_set += 262`. Dependents=[] -> end.
 
 The final result:
-* Updated nodes: {263, 262}
+* **APPDB Updated**: {262}
+* **State Modified (skip APPDB)**: {263}
+* **Not Reached**: {234, 237, 238, 257, 258, 264, 256}
 
-**Call flow trace**:
+**Call flow trace (with caller-level bypass)**:
 
-| Step | back_walk call | walk_spec evaluation | walk_spec result | prune_spec | Continue? | APPDB | modified_node_set after |
-|:-----|:---------------|:---------------------|:-----------------|:-----------|:----------|:------|:------------------------|
-| 1 | back_walk(238) | ECMP. Depends [234, 237]. Both enabled -> no state change. No gateway match (ECMP). No depends in modified_set (empty). | false | **ECMP + not matched -> don't prune** | yes -> dependents=[257, 258, 263, 264] | -- | {} |
-| 2 | back_walk(257) | Depends [238]. 238 enabled. Gateway 2064:100::1d != 1::1. 238 NOT in modified_set. | false | **pruned** | no | -- | {} |
-| 3 | back_walk(258) | Depends [238]. 238 enabled. Gateway 2064:200::1e != 1::1. 238 NOT in modified_set. | false | **pruned** | no | -- | {} |
-| 4 | back_walk(263) | Depends [238]. 238 enabled. Gateway 1::1 == nexthop -> **match**. Mark all depends disabled: {238: false}. Single depend, fully disabled -> skip APPDB. | true | not pruned | yes -> dependents=[262] | -- | {263} |
-| 5 | back_walk(262) | Depends [263, 264]. 263 fully disabled -> mark {263:false, 264:true}. 263 in modified_set -> relevant. Regen: 264->{fc06::2, fc08::2} (via 238, all enabled). | true | not pruned | yes -> dependents=[] | 262: {fc06::2, fc08::2} | {263, 262} |
-| 6 | back_walk(264) | Depends [238]. 238 enabled. Gateway 2::2 != 1::1. 238 NOT in modified_set. | false | **pruned** | no | -- | {263, 262} |
+| Step | Action | walk_spec evaluation | walk_spec result | prune_spec | APPDB | modified_node_set after |
+|:-----|:-------|:---------------------|:-----------------|:-----------|:------|:------------------------|
+| 0 | Caller: walk_spec(263) | Gateway 1::1 == nexthop -> **match**. Disable all depends: {238: false}. Single depend, fully disabled -> skip APPDB. | true | bypassed | -- | {263} |
+| 1 | back_walk(262) | Depends [263, 264]. 263 fully disabled -> mark {263:false, 264:true}. 263 in modified_set -> relevant. Regen: 264->{fc06::2, fc08::2} (via 238, all enabled). | true | not pruned | 262: {fc06::2, fc08::2} | {263, 262} |
+| | 262 dependents=[] -> end | | | | | |
 
 ### Summary of corrected Topology 1 expectations
 
-| Test Case | APPDB Updated | Modified (skip APPDB) | Not Touched |
+| Test Case | APPDB Updated | State Modified (skip APPDB) | Not Reached |
 |:---|:---|:---|:---|
 | Local Failure (fc06::2) | 238, 257, 258, 263, 264, 256, 262 | 237 | 234 |
-| Remote Failure 1 (2064:100::1d withdrawn) | 256| 257 | all others |
-| Remote Failure 2 (1::1 withdrawn) | 262 | 263 | all others |
+| Remote Failure 1 (2064:200::1e withdrawn) | 256 | 258 | 234, 237, 238, 257, 263, 264, 262 |
+| Remote Failure 2 (1::1 withdrawn) | 262 | 263 | 234, 237, 238, 257, 258, 264, 256 |
 
 
 ## Test Topology 2 Global table recursive routes
@@ -895,8 +881,8 @@ Above graph could be presented as the following table
 | 260 | intermediate | `2064:100::1d` | `[236]` | `[263]` | `{236: true}` |
 | 264 | intermediate | `2064:200::1e` | `[236]` | `[263]` | `{236: true}` |
 | 263 | route 1::1 | composite | `[260, 264]` | -- | `{260: true, 264: true}` |
-| 266 | intermediate | `2::2` | `[235]` | `[269]` | `{235: true}` |
-| 270 | intermediate | `3::3` | `[232]` | `[269]` | `{232: true}` |
+| 266 | intermediate | `3::3` | `[235]` | `[269]` | `{235: true}` |
+| 270 | intermediate | `2::2` | `[232]` | `[269]` | `{232: true}` |
 | 269 | route 4::4 | composite | `[266, 270]` | -- | `{266: true, 270: true}` |
 
 ### Local Failure (`fc06::2` withdrawn)
@@ -911,7 +897,7 @@ Above graph could be presented as the following table
    - Gateway `fc06::2` matches. `235` in `modified_set`.
    - `235` fully disabled → mark: `{232: true, 235: false}`.
    - Flat: `{fc08::2}`. APPDB written. `modified_set += 236`.
-3. **266** (via `2::2`, depends `[235]`):
+3. **266** (via `3::3`, depends `[235]`):
    - `235` in `modified_set` → relevant!
    - `235` fully disabled → mark: `{235: false}`. Fully disabled. Skip APPDB.
    - `modified_set += 266`. Continue to `[269]`.
@@ -947,35 +933,34 @@ Above graph could be presented as the following table
 | 4 | back_walk(263) | Depends [260, 264]. 260 NOT fully disabled (236 still enabled in 260). 260 in modified_set -> relevant. Regen: 260->{fc08::2}, 264->{fc08::2} via 236. | true | not pruned | yes -> dependents=[] | 263: {fc08::2} | {235, 236, 260, 263} |
 | 5 | back_walk(264) | Depends [236]. 236 in modified_set -> relevant. Regen via 236 -> {fc08::2}. | true | not pruned | yes -> dependents=[263] | 264: {fc08::2} | {235, 236, 260, 263, 264} |
 | 6 | back_walk(263) | **Revisit**. Depends [260, 264]. 264 now also in modified_set. Regen: same {fc08::2}. | true | not pruned | yes -> dependents=[] | 263: {fc08::2} (same) | {235, 236, 260, 263, 264} |
-| 7 | back_walk(266) | Depends [235]. 235 fully disabled -> mark {235: false}. No gateway match (2::2 != fc06::2). 235 in modified_set -> relevant. Regen: no enabled depends -> single path disabled -> skip APPDB. | true | not pruned | yes -> dependents=[269] | -- | {235, 236, 260, 263, 264, 266} |
+| 7 | back_walk(266) | Depends [235]. 235 fully disabled -> mark {235: false}. No gateway match (3::3 != fc06::2). 235 in modified_set -> relevant. Regen: no enabled depends -> single path disabled -> skip APPDB. | true | not pruned | yes -> dependents=[269] | -- | {235, 236, 260, 263, 264, 266} |
 | 8 | back_walk(269) | Depends [266, 270]. 266 fully disabled -> mark {266:false, 270:true}. 266 in modified_set -> relevant. Regen: 270->{fc08::2} (via 232). | true | not pruned | yes -> dependents=[] | 269: {fc08::2} | {235, 236, 260, 263, 264, 266, 269} |
 
 
 ### Remote Failure 1 (`2064:100::1d` withdrawn)
-**NHT:** `nexthop=2064:100::1d`, `resolved_nhg_id=236`
+**NHT:** `nexthop=2064:100::1d`, `resolved_nhg_id=260` (route-level NHG, gateway `2064:100::1d`)
 
-1. **236** (STARTING): No match, `modified_set` empty. Continue to `[260, 264]`.
-2. **260** (`2064:100::1d`): Gateway MATCHES! `{236: false}`. Fully disabled.
-   - Skip APPDB. `modified_set = {260}`. Continue to `[263]`.
-3. **264** (`2064:200::1e`): `236` not in `modified_set`. No match. Prune.
-4. **263** (route 1::1, depends `[260, 264]`):
-   - `260` in `modified_set` → relevant!
-   - `260` fully disabled → mark: `{260: false, 264: true}`.
-   - Flat: `264 → 236 → {fc06::2, fc08::2}`. APPDB: `{fc06::2, fc08::2}`.
-   - `modified_set += 263`.
+1. **260** (STARTING, gateway `2064:100::1d`):
+   - Gateway matches nexthop. Caller-level bypass: evaluate walk_spec but never prune.
+   - Disable all depends: `{236: false}`. Single depend, fully disabled -> skip APPDB.
+   - `modified_set = {260}`. Continue to dependents `[263]`.
+2. **263** (route 1::1, depends `[260, 264]`):
+   - `260` in `modified_set` -> relevant!
+   - `260` fully disabled -> mark: `{260: false, 264: true}`.
+   - Regen: `264 -> 236 -> {fc06::2, fc08::2}`. APPDB: `{fc06::2, fc08::2}`.
+   - `modified_set += 263`. Dependents=[] -> end.
 
 - **Updated (APPDB):** `263`
 - **Modified (skip APPDB):** `260`
-- **Not touched:** `236, 232, 235, 264, 266, 270, 269`
+- **Not reached:** `232, 235, 236, 264, 266, 270, 269`
 
-**Call flow trace**:
+**Call flow trace (with caller-level bypass)**:
 
-| Step | back_walk call | walk_spec evaluation | walk_spec result | prune_spec | Continue? | APPDB | modified_node_set after |
-|:-----|:---------------|:---------------------|:-----------------|:-----------|:----------|:------|:------------------------|
-| 1 | back_walk(236) | ECMP. Depends [232,235]. Both enabled -> no change. No gateway match. No depends in modified_set. | false | **ECMP + not matched -> don't prune** | yes -> dependents=[260,264] | -- | {} |
-| 2 | back_walk(260) | Depends [236]. 236 enabled. Gateway 2064:100::1d == nexthop -> **match**. Mark all depends disabled: {236: false}. Single depend -> skip APPDB. | true | not pruned | yes -> dependents=[263] | -- | {260} |
-| 3 | back_walk(263) | Depends [260,264]. 260 fully disabled -> mark {260:false, 264:true}. 260 in modified_set -> relevant. Regen: 264->{fc06::2, fc08::2} (via 236). | true | not pruned | yes -> dependents=[] | 263: {fc06::2, fc08::2} | {260,263} |
-| 4 | back_walk(264) | Depends [236]. 236 enabled. Gateway 2064:200::1e != 2064:100::1d. 236 NOT in modified_set. | false | **pruned** | no | -- | {260,263} |
+| Step | Action | walk_spec evaluation | walk_spec result | prune_spec | APPDB | modified_node_set after |
+|:-----|:-------|:---------------------|:-----------------|:-----------|:------|:------------------------|
+| 0 | Caller: walk_spec(260) | Gateway 2064:100::1d == nexthop -> **match**. Disable all depends: {236: false}. Single depend, fully disabled -> skip APPDB. | true | bypassed | -- | {260} |
+| 1 | back_walk(263) | Depends [260, 264]. 260 fully disabled -> mark {260:false, 264:true}. 260 in modified_set -> relevant. Regen: 264->{fc06::2, fc08::2} (via 236, all enabled). | true | not pruned | 263: {fc06::2, fc08::2} | {260, 263} |
+| | 263 dependents=[] -> end | | | | | |
 
 
 ### Remote Failure 2 (`1::1` withdrawn)
@@ -994,40 +979,38 @@ Above graph could be presented as the following table
 
 
 ### Remote Failure 3 (`2::2` withdrawn)
-**NHT:** `nexthop=2::2`, `resolved_nhg_id=235`
+**NHT:** `nexthop=2::2`, `resolved_nhg_id=270` (route-level NHG, gateway `2::2`)
 
-1. **235** (STARTING, leaf `fc06::2`): `fc06::2 ≠ 2::2`. No match. Continue to `[236, 266]`.
-2. **236:** `235` not in `modified_set`. No match. Prune.
-3. **266** (via `2::2`): Gateway MATCHES! `{235: false}`. Fully disabled.
-   - Skip APPDB. `modified_set = {266}`. Continue to `[269]`.
-4. **269** (depends `[266, 270]`):
-   - `266` in `modified_set` → relevant!
-   - `266` fully disabled → mark: `{266: false, 270: true}`.
-   - Flat: `270 → 232 → {fc08::2}`. APPDB: `{fc08::2}`.
+1. **270** (STARTING, gateway `2::2`):
+   - Gateway matches nexthop. Caller-level bypass: evaluate walk_spec but never prune.
+   - Disable all depends: `{232: false}`. Single depend, fully disabled -> skip APPDB.
+   - `modified_set = {270}`. Continue to dependents `[269]`.
+2. **269** (route 4::4, depends `[266, 270]`):
+   - `270` in `modified_set` -> relevant!
+   - `270` fully disabled -> mark: `{266: true, 270: false}`.
+   - Regen: `266 -> 235 -> {fc06::2}`. APPDB: `{fc06::2}`.
+   - `modified_set += 269`. Dependents=[] -> end.
 
-- **Updated (APPDB):** `269`
-- **Modified (skip APPDB):** `266`
-- **Not touched:** all others
+- **Updated (APPDB):** `269: {fc06::2}`
+- **Modified (skip APPDB):** `270`
+- **Not reached:** `232, 235, 236, 260, 264, 263, 266`
 
 **Call flow trace (with caller-level bypass)**:
 
-| Step | back_walk call | walk_spec evaluation | walk_spec result | prune_spec | Continue? | APPDB | modified_node_set after |
-|:-----|:---------------|:---------------------|:-----------------|:-----------|:----------|:------|:------------------------|
-| 0 | Caller: walk_spec(235) | Leaf. Gateway fc06::2 != 2::2. No modified_set entries. | false | **bypassed by caller** | caller iterates dependents=[236, 266] | -- | {} |
-| 1 | back_walk(236) | ECMP. Depends [232, 235]. Both enabled -> no state change. No gateway match. No depends in modified_set. | false | **ECMP + not matched -> don't prune** | yes -> dependents=[260, 264] | -- | {} |
-| 2 | back_walk(260) | Depends [236]. 236 enabled. Gateway 2064:100::1d != 2::2. 236 NOT in modified_set. | false | **pruned** | no | -- | {} |
-| 3 | back_walk(264) | Depends [236]. 236 enabled. Gateway 2064:200::1e != 2::2. 236 NOT in modified_set. | false | **pruned** | no | -- | {} |
-| 4 | back_walk(266) | Depends [235]. 235 fully enabled ({235: true}), no state change. Gateway 2::2 == nexthop -> **match**. Mark all depends disabled: {235: false}. Single depend, fully disabled -> skip APPDB. | true | not pruned | yes -> dependents=[269] | -- | {266} |
-| 5 | back_walk(269) | Depends [266, 270]. 266 fully disabled -> mark {266:false, 270:true}. 266 in modified_set -> relevant. Regen: 270->{fc08::2} (via 232). | true | not pruned | yes -> dependents=[] | 269: {fc08::2} | {266, 269} |
+| Step | Action | walk_spec evaluation | walk_spec result | prune_spec | APPDB | modified_node_set after |
+|:-----|:-------|:---------------------|:-----------------|:-----------|:------|:------------------------|
+| 0 | Caller: walk_spec(270) | Gateway 2::2 == nexthop -> **match**. Disable all depends: {232: false}. Single depend, fully disabled -> skip APPDB. | true | bypassed | -- | {270} |
+| 1 | back_walk(269) | Depends [266, 270]. 270 fully disabled -> mark {266:true, 270:false}. 270 in modified_set -> relevant. Regen: 266->{fc06::2} (via 235). | true | not pruned | 269: {fc06::2} | {270, 269} |
+| | 269 dependents=[] -> end | | | | | |
 
 
 ### Summary of corrected Topology 2 expectations:
-| Test Case | APPDB Updated | Modified (skip APPDB) | Not Touched |
+| Test Case | APPDB Updated | State Modified (skip APPDB) | Not Reached |
 |:---|:---|:---|:---|
 | Local Failure (`fc06::2`) | `236, 260, 264, 263, 269` | `235, 266` | `232, 270` |
-| Remote Failure 1 (`2064:100::1d`) | `263` | `260` | `236, 232, 235, 264, 266, 270, 269` |
+| Remote Failure 1 (`2064:100::1d`) | `263: {fc06::2, fc08::2}` | `260` | `232, 235, 236, 264, 266, 270, 269` |
 | Remote Failure 2 (`1::1`) | `--` | `--` | all |
-| Remote Failure 3 (`2::2`) | `269` | `266` | all others |
+| Remote Failure 3 (`2::2`) | `269: {fc06::2}` | `270` | `232, 235, 236, 260, 264, 263, 266` |
 
 ## Test Topology 3 SRv6 VPN case
 Assume we have 2064:100::1d/128 and 2064:200::1e/128 learnt via eBGP. Each route has two paths via fc06::2 and fc08::2
