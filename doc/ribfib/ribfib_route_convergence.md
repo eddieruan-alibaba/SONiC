@@ -2,107 +2,251 @@
 
 # Table of Contents <!-- omit in toc -->
 - [Problem Statements](#problem-statements)
-- [Existing NHG MGR codes](#existing-nhg-mgr-codes)
-- [Code Changes](#code-changes)
-  - [fib\_nhg\_trigger\_node\_quick\_fixup()](#fib_nhg_trigger_node_quick_fixup)
-    - [Functionality:](#functionality)
-  - [fib\_nhg\_back\_walk()](#fib_nhg_back_walk)
-    - [Parameters:](#parameters)
-    - [Usage:](#usage)
-    - [Main Logic:](#main-logic)
-  - [Changes in  class RIBNHGEntry](#changes-in--class-ribnhgentry)
-    - [New Field: m\_resolved\_enable\_group](#new-field-m_resolved_enable_group)
-    - [Method Update: RIBNHGEntry::getNextHopGroupFields()](#method-update-ribnhgentrygetnexthopgroupfields)
-  - [fib\_nhg\_walk\_spec\_for\_node\_quick\_fixup](#fib_nhg_walk_spec_for_node_quick_fixup)
-    - [Main Logic:](#main-logic-1)
-  - [fib\_nhg\_prune\_spec\_for\_node\_quick\_fixup](#fib_nhg_prune_spec_for_node_quick_fixup)
-    - [Main Logic:](#main-logic-2)
-- [Example](#example)
-- [Test cases](#test-cases)
-  - [Gtest Framework](#gtest-framework)
+  - [AI Spec for code generating](#ai-spec-for-code-generating)
+- [FRR Modifications](#frr-modifications)
+  - [RNH event information](#rnh-event-information)
+    - [Core RNH Tracking Fields](#core-rnh-tracking-fields)
+    - [Change Detection Logic](#change-detection-logic)
+  - [Dplane Integration: New Event Type \& Context Structure](#dplane-integration-new-event-type--context-structure)
+    - [New Dplane Operation Enum](#new-dplane-operation-enum)
+    - [Extended Dplane Context](#extended-dplane-context)
+    - [RNH Info Structure Definition](#rnh-info-structure-definition)
+    - [Event Generation Workflow](#event-generation-workflow)
+  - [FPM Message Serialization (SONiC Integration)](#fpm-message-serialization-sonic-integration)
+- [SONiC-fib Enhancements for NHT events](#sonic-fib-enhancements-for-nht-events)
+- [FPMsyncd Modifications](#fpmsyncd-modifications)
+  - [Existing NHG MGR codes](#existing-nhg-mgr-codes)
+  - [`fib_nhg_trigger_node_quick_fixup()`](#fib_nhg_trigger_node_quick_fixup)
+    - [Part 1: Global Table Context Backwalk](#part-1-global-table-context-backwalk)
+    - [Part 2: VPN Context Backwalk](#part-2-vpn-context-backwalk)
+  - [`fib_nhg_back_walk()`](#fib_nhg_back_walk)
+    - [Parameters](#parameters)
+    - [Design \& Extensibility](#design--extensibility)
+    - [Execution Flow](#execution-flow)
+  - [Changes for Part 1](#changes-for-part-1)
+    - [Changes in  `class RIBNHGEntry`](#changes-in--class-ribnhgentry)
+      - [New Field: `m_resolved_enable_group`](#new-field-m_resolved_enable_group)
+      - [Method Update: `RIBNHGEntry::getNextHopGroupFields()`](#method-update-ribnhgentrygetnexthopgroupfields)
+    - [`fib_nhg_walk_spec_for_node_quick_fixup()`](#fib_nhg_walk_spec_for_node_quick_fixup)
+      - [Execution Logic:](#execution-logic)
+    - [`fib_nhg_prune_spec_for_node_quick_fixup()`](#fib_nhg_prune_spec_for_node_quick_fixup)
+      - [Prune Logic:](#prune-logic)
+  - [Changes for Part 2](#changes-for-part-2)
+    - [Motivation](#motivation)
+    - [Modifications to `RIBNHGTable` Class](#modifications-to-ribnhgtable-class)
+      - [New Field: `m_nexthop_to_RIBNHG_map`](#new-field-m_nexthop_to_ribnhg_map)
+      - [Supporting APIs](#supporting-apis)
+      - [Integration Points](#integration-points)
+    - [Backwalk for VPN-Scoped RIBNHGEntries](#backwalk-for-vpn-scoped-ribnhgentries)
+      - [`fib_nhg_walk_spec_for_node_quick_fixup_sonic_nhg()`](#fib_nhg_walk_spec_for_node_quick_fixup_sonic_nhg)
+      - [`fib_nhg_prune_spec_for_node_quick_fixup_sonic_nhg()`](#fib_nhg_prune_spec_for_node_quick_fixup_sonic_nhg)
+- [Examples](#examples)
   - [Test Topology 1 Global table recursive routes](#test-topology-1-global-table-recursive-routes)
-    - [Test case Local Failure Simulation](#test-case-local-failure-simulation)
-    - [Test case Remote Failure Simulation 1](#test-case-remote-failure-simulation-1)
-    - [Test remote failure 2](#test-remote-failure-2)
+    - [Local Failure fc06::2 withdrawn](#local-failure-fc062-withdrawn)
+    - [Remote Failure 1 (2064:100::1d withdrawn)](#remote-failure-1-20641001d-withdrawn)
+    - [Remote Failure 2 (1::1 withdrawn)](#remote-failure-2-11-withdrawn)
+    - [Summary of corrected Topology 1 expectations](#summary-of-corrected-topology-1-expectations)
   - [Test Topology 2 Global table recursive routes](#test-topology-2-global-table-recursive-routes)
-    - [Test local failure](#test-local-failure)
-    - [Test remote failure 1](#test-remote-failure-1)
-    - [Test remote failure 2](#test-remote-failure-2-1)
-    - [Test remote failure 3](#test-remote-failure-3)
+    - [Local Failure (`fc06::2` withdrawn)](#local-failure-fc062-withdrawn-1)
+    - [Remote Failure 1 (`2064:100::1d` withdrawn)](#remote-failure-1-20641001d-withdrawn-1)
+    - [Remote Failure 2 (`1::1` withdrawn)](#remote-failure-2-11-withdrawn-1)
+    - [Remote Failure 3 (`2::2` withdrawn)](#remote-failure-3-22-withdrawn)
+    - [Summary of corrected Topology 2 expectations:](#summary-of-corrected-topology-2-expectations)
   - [Test Topology 3 SRv6 VPN case](#test-topology-3-srv6-vpn-case)
-    - [Test local failure](#test-local-failure-1)
+    - [Test local failure](#test-local-failure)
     - [Test remote failure](#test-remote-failure)
+- [Test cases](#test-cases)
 
 
 # Problem Statements
-In the current SONiC architecture, orchagent handles local port down events by rapidly updating failed load balance members to minimize the traffic loss window. However, in other failure scenarios, FRR creates a new Next Hop Group (NHG) and migrates prefixes sequentially. Consequently, the traffic loss window is proportional to the number of prefixes.
+In the current SONiC architecture, orchagent mitigates traffic loss during local port-down events by rapidly removing failed load-balancing members. However, in other failure scenarios, FRR generates a new Next Hop Group (NHG) and migrates dependent prefixes sequentially, causing the traffic loss window to scale linearly with the number of affected prefixes.
 
-To address this, we propose a Prefix Independent Convergence (PIC) design. This mechanism triggers a process upon receiving a Next Hop Tracking (NHT) update event from zebra to fpmsyncd. fpmsyncd will initiate a backwalk from the flagged NHG to all dependent NHGs, allowing for a rapid fixup of the affected NHGs.
+To eliminate this prefix-dependent convergence delay, we propose a Prefix-Independent Convergence (PIC) mechanism. When fpmsyncd receives a Next Hop Tracking (NHT) update from zebra, it triggers a targeted reconciliation process. By performing a dependency backwalk from the invalidated NHG, the system identifies all reliant NHGs and applies coordinated updates, bypassing sequential prefix migration. The primary objective is to immediately prune failed forwarding paths to minimize the traffic loss window, allowing the control plane to subsequently recalculate and install optimal routes in the background.
 
-The overall workflow would contains three parts
-1. FRR changes to pass NHT event to FPM only via dplane
-2. sonic-fib change to create a new data schema to mapp NHT event which contains impacted nexthop and this impacted nexthop's corresponding NHG ID.
-3. fpmsyncd would use received impacted nexthop and this impacted nexthop's corresponding NHG ID to perform a walk through all NHGs and fix involved NHG accordingly.
+The implementation comprises three core components:
+
+* **FRR Modification**: Route all NHT events to the FPM interface exclusively through the dplane subsystem.
+* **sonic-fib Enhancement**: Introduce a new data schema to map NHT events, capturing both the affected next hop and its corresponding NHG identifier.
+* **fpmsyncd Logic**:  Traverse all dependent NHGs and rapidly reconcile the affected forwarding state.
 
 
-This Low-Level Design (LLD) focuses on the third part, how to implement the backwalk infrastructure within the NHG Manager. The following prompt is designed to instruct an LLM to generate the necessary code for this implementation.
+## AI Spec for code generating
+This Low-Level Design (LLD) is intentionally structured with implementation-level detail to serve as a high-fidelity prompt for LLM-based code generation tools (e.g., Qoder CLI https://qoder.com/en/cli ), enabling accurate, spec-to-code automation.
 
-The input information from this NHT event is
-* Nexthop address : used in walk spec to decide is the walked NHG is relevent or for SONiC NHG table walk, a.k.a PIC edge case.
-* Its current resolved NHG ID : this NHG id is used to start backwalk, a.k.a PIC core case. Be aware, the starting point may still be valid paths.
-* Its current original NHG ID : we may not use it for now.
+The following list tracks all major changed after LLM's braimstorm
 
-# Existing NHG MGR codes
+1. LLM could generate step by step intermediate results to verify the result
+2. LLM flag idempo issue, which leads to clarify.
+
+# FRR Modifications
+This section outlines modifications to FRRouting (FRR) to enhance Next Hop Tracking (NHT) event propagation from Zebra to the dplane, enabling fpmsyncd to respond proactively to nexthop changes and minimize traffic loss during convergence.
+
+## RNH event information
+### Core RNH Tracking Fields
+Each rnh (Route Next Hop) structure maintains the following state for change detection:
+
+| Field | Description |Storage Location |
+|:---|:---|:---|
+| Tracked Prefix| The prefix being monitored for nexthop changes | rnh->node->p |
+| Resolved Route Prefix | The prefix of the route currently resolving the tracked prefix | rnh->resolved_route |
+| Resolution State | The active route_entry used to resolve the tracked prefix rnh->state |
+
+
+### Change Detection Logic
+The function zebra_rnh_eval_nexthop_entry() in https://github.com/FRRouting/frr/blob/master/zebra/zebra_rnh.c#L785 evaluates whether an incoming route update affects an RNH by comparing:
+* Whether the incoming route_node *prn matches the RNH's current resolved prefix
+* Whether the incoming route_entry *re differs from the RNH's cached state
+
+```
+static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
+					 int force, struct route_node *nrn,
+					 struct rnh *rnh,
+					 struct route_node *prn,
+					 struct route_entry *re)
+```
+
+When a state change is detected (state_changed == true), Zebra must propagate the following context to dplane to enable informed FIB NHT updates.
+
+The purpose for zebra sends NHT event to fpmsyncd is to give enought information which informs that the current nexthop its holding will make some changes. So fpmsyncd's FIB module could response this event properly for reducing traffic loss window. Therefore, the following information would need to pass down to dplane when state_changed is set.
+
+| Field | Purpose | Unresolved Value |
+|:---|:---|:---|
+| rnh_prefix | Identifies affected NHGs | — |
+| prev_resolved_prefix | Previous resolving route prefix | 0.0.0.0/0 (or equivalent zero prefix)
+| prev_resolved_nhg_id | Previous resolving NHG identifier | 0 |
+| curr_resolved_prefix | Current resolving route prefix | 0.0.0.0/0 |
+| curr_resolved_nhg_id | Current resolving NHG identifier | 0 |
+
+Note: Currently, all related context is sent to dplane. Processing follows a phased approach:
+* Phase 1: Trigger backwalk when an RNH prefix becomes unresolvable. Walk from the previous resolved NHG ID to prune failed paths from dependent NHGs.
+* Future: Extend handling to cover other caases.
+
+## Dplane Integration: New Event Type & Context Structure
+### New Dplane Operation Enum
+A new action enum DPLANE_OP_NHT_EVENT_UPDATE would be added in dplane_op_e https://github.com/FRRouting/frr/blob/master/zebra/zebra_dplane.h#L116
+
+```
+enum dplane_op_e {
+    // ... existing ops ...
+    DPLANE_OP_NHT_EVENT_UPDATE,  // New: RNH state change notification
+};
+```
+
+### Extended Dplane Context
+Extend struct zebra_dplane_ctx (https://github.com/FRRouting/frr/blob/master/zebra/zebra_dplane.c#L446) with a dedicated union member:
+
+```
+struct zebra_dplane_ctx {
+    // ... existing fields ...
+    union {
+        // ... existing union members ...
+        struct dplane_rnh_info rnh_info;  // New: RNH event payload
+    };
+};
+```
+### RNH Info Structure Definition
+Define the payload structure to carry RNH change context:
+
+```
+struct dplane_rnh_info {
+  struct prefix p; // Tracked RNH prefix
+
+  struct prefix previous_resolved_prefix;
+  uint32_t previous_resolved_nhg_id;
+
+  struct prefix current_resolved_prefix;
+  uint32_t current_resolved_nhg_id;
+
+}
+```
+
+### Event Generation Workflow
+* Implement a helper function to populate dplane_rnh_info from RNH state.
+* Enqueue the populated zebra_dplane_ctx into the dplane work queue.
+* Invoke this helper from zebra_rnh_eval_nexthop_entry() immediately after detecting a state transition.
+
+We need to create a new function to populate dplane_rnh_info, then put the ctx into the queue. This new function would be triggered from zebra_rnh_eval_nexthop_entry() once we find there is some changes in this rnh. 
+
+## FPM Message Serialization (SONiC Integration)
+In fpm_nl_enqueue() https://github.com/sonic-net/sonic-buildimage/blob/master/src/sonic-frr/dplane_fpm_sonic/dplane_fpm_sonic.c#L2451, add a case handler for the new operation:
+```
+case DPLANE_OP_NHT_EVENT_UPDATE:
+    // Extract rnh_info from ctx
+    // Serialize to FPM message per sonic-fib schema
+    // Enqueue to FPM socket
+    break;
+```
+The FPM message format for NHT_EVENT_UPDATE must be defined in the sonic-fib interface definition, ensuring alignment between FRR's dplane output and fpmsyncd's ingestion logic.
+
+# SONiC-fib Enhancements for NHT events
+TODO: define a new schema for NHT events.
+
+
+# FPMsyncd Modifications
+The input data for this NHT event is detailed in the preceding sections. Under the Phase 1 approach, FPMsyncd will invoke fib_nhg_trigger_node_quick_fixup() when current_resolved_nhg_id is zero, indicating that the tracked nexthop address cannot be resolved. Additional scenarios will be addressed in future updates.
+
+## Existing NHG MGR codes
 Here are current  nhg mgr 's  codes
 
 * https://github.com/eddieruan-alibaba/sonic-swss/blob/rib_fib/fpmsyncd/nhgmgr.cpp
 * https://github.com/eddieruan-alibaba/sonic-swss/blob/rib_fib/fpmsyncd/nhgmgr.h
 
-# Code Changes
-## fib_nhg_trigger_node_quick_fixup()
-This function is invoked upon receiving a Next Hop Tracking (NHT) event sent from Zebra to fpmsyncd. It accepts the following input parameters:
-* Nexthop Address: The specific IPv4 or IPv6 address associated with the event.
-* Resolved NHG ID: The resolved Next Hop Group ID for the nexthop address
-* Origial NHG ID: The original Next Hop Group ID for the nexthop address
+## `fib_nhg_trigger_node_quick_fixup()`
+This function serves as the primary entry point invoked when `fpmsyncd` receives a Next Hop Tracking (NHT) event from Zebra. It accepts the following parameters:
+* **Nexthop Address**: The specific IPv4 or IPv6 address associated with the event.
+  * *Note*: Input prefixes are converted to nexthop addresses because, for the cases we are interested, the tracked RNH represents a specific next-hop address rather than a network prefix.
+* **Resolved NHG ID**: The previously resolved Next Hop Group ID for the given nexthop address. This value serves as the starting point for the backwalk traversal.
 
-### Functionality:
-This function initializes the fib_nhg_walking_ctx with the following configuration:
-* Visited Set: An empty visited_node_set.
-* Walk Specification: Uses fib_nhg_walk_spec_for_node_quick_fixup.
-* Prune Specification: Uses fib_nhg_prune_spec_for_node_quick_fixup.
-* Target: The nexthop address indicating the impacted resource.
+The function performs two primary operations:
 
-Finally, it initiates the traversal by calling fib_nhg_back_walk() via Resolved NHG ID.
+### Part 1: Global Table Context Backwalk
+Uses the incoming resolved NHG ID to trigger a backwalk that updates all relevant NHGs in the global table context.
 
-Currently, we don't use original NHG ID to initiate backwalk. This could be added in the future with proper use cases.
+It initializes a `fib_nhg_walking_ctx` structure with the following configuration:
+* **Walk context**: It is a json data structure which could store various information during the walk. For example 
+  * An `visited_node_set`. It starts with an empty set. The visited node set would be added later one by one. Each entry tracks a node ID and a boolean flag indicating whether the node was modified during traversal. 
+    * *Note: Even if a node is already present in the visited set, the algorithm may still initiate a forward walk to its dependents to propagate any pending updates.*
+* **Walk Specification**: Set to `fib_nhg_walk_spec_for_node_quick_fixup` in part 1, which defines the operations to perform on each visited node.
+* **Prune Specification**: Set to `fib_nhg_prune_spec_for_node_quick_fixup` in part 1, which determines whether traversal should terminate at the current node.
+* **Nexthop Address**: The address identifying the impacted routing resource.
 
-## fib_nhg_back_walk()
-This method is added to the RIBNHGTable class to trigger a backwalk across all maintained RIBNHGEntry objects.
+Finally, the function initiates the traversal by calling `fib_nhg_back_walk()`, using the resolved NHG ID as the root node.
 
-### Parameters:
-* uint32_t id: The Zebra NHG ID, used as a key to retrieve the RIBNHGEntry via getEntry(uint32_t id).
-* fib_nhg_walking_ctx: A struct containing:
-    * visited_node_set: A set of visited node IDs.
-    * fib_nhg_walk_spec_func: A callback function to apply necessary updates to the current node.
-    * fib_nhg_prune_spec_func: A callback function to determine whether the backwalk should continue from the current node.
-    * nexthop_address: Indicates the impacted nexthop.
+### Part 2: VPN Context Backwalk
+Uses the incoming nexthop address to locate all `RIBHNGEntry` instances that reference it across different VPN contexts. The function iterates through each matching entry and triggers a backwalk from that node to update the corresponding SONiC NHGs.
 
-### Usage:
-While currently implemented for NHG quick fixup, this infrastructure is designed to be extensible for other purposes.
+*Note*: 
+1. Currently, backwalks are not initiated using the original NHG ID. This capability may be introduced in future updates once specific use cases are validated.
+2. Since these NHG have VPN contexts, we can't use part 1's walk to reach these nodes. 
 
-### Main Logic:
-1. Retrieve the RIBNHGEntry using the incoming ID (getEntry(uint32_t id)).
-2. Add the current node ID to the visited_node_set.
-3. Execute the walk spec function on the found RIBNHGEntry.
-    * This may trigger updates to the object (e.g., disabling failed members).
-4. Execute the prune spec function to decide whether to continue the backwalk. This prun spec function gets the walk spec function return value and this RIBNHGEntry object as input.
-5. If the backwalk continues:
-    * Retrieve the dependency list of the current RIBNHGEntry.
-    * Filter out any nodes already present in visited_node_set.
-    * Recursively call fib_nhg_back_walk() on each remaining node in the dependency list.
+## `fib_nhg_back_walk()`
+This function provides a generalized backwalk infrastructure within the `RIBNHGTable` class, enabling traversal across all managed `RIBNHGEntry` objects.
 
-## Changes in  class RIBNHGEntry
-### New Field: m_resolved_enable_group
+### Parameters
+* `id` (`uint32_t`): The Zebra NHG ID, used as a key to retrieve the corresponding `RIBNHGEntry` via `getEntry()`.
+* `ctx` (`fib_nhg_walking_ctx`): A configuration structure containing:
+  * `walking_ctx_json` : a json data structure to store various information during the walk.
+    * `visited_node_set`: A set tracking visited nodes, where each entry stores a node ID and a boolean flag indicating whether the node was modified during traversal.
+  * `fib_nhg_walk_spec_func`: A callback function that applies necessary updates to the current node.
+  * `fib_nhg_prune_spec_func`: A callback function that determines whether traversal should terminate at the current node.
+  * `nexthop_address`: The nexthop address identifying the impacted routing resource.
+
+### Design & Extensibility
+While currently utilized for NHG quick fixup operations, this infrastructure is designed to be extensible and reusable for other backwalk-driven workflows.
+
+### Execution Flow
+1. **Entry Retrieval**: Fetches the target `RIBNHGEntry` using the provided `id` via `getEntry()`.
+2. **Walk Specification Execution**: Invokes the walk callback (`fib_nhg_walk_spec_func`) on the retrieved entry. This may apply state updates to the object (e.g., marking failed members as inactive).
+3. **Visited State Tracking**: Adds the current node ID and its modification status to `visited_node_set`.
+4. **Prune Evaluation**: Invokes the prune callback (`fib_nhg_prune_spec_func`), passing the return value from the walk callback and a reference to the current `RIBNHGEntry`. The callback determines whether traversal should halt.
+5. **Recursive Traversal**: If pruning is not triggered, the function evaluates continuation conditions:
+   * For **ECMP** nexthops: recursion proceeds unconditionally.
+   * For **single-path** or **recursive** nexthops: recursion proceeds only if the node was modified.
+   * If conditions are met, the function retrieves the dependency list of the current `RIBNHGEntry` and recursively invokes `fib_nhg_back_walk()` for each dependent node.
+
+## Changes for Part 1
+### Changes in  `class RIBNHGEntry`
+#### New Field: `m_resolved_enable_group`
 Need to add a new field m_resolved_enable_group to track if resovled NHG is enabled or not.
 
 ```
@@ -114,112 +258,104 @@ Need to add a new field m_resolved_enable_group to track if resovled NHG is enab
          */
         unordered_map<uint32_t, bool> m_resolved_enable_group;
 ```
+Note: Forward walk calculations are compared against this stored state to determine whether the node requires an update.
 
-### Method Update: RIBNHGEntry::getNextHopGroupFields()
-Added a validation check: if a path is marked as disabled in m_resolved_enable_group, its information is excluded from the output strings.
+#### Method Update: `RIBNHGEntry::getNextHopGroupFields()`
+A validation check is added to exclude paths marked as disabled in `m_resolved_enable_group` from the generated output strings.
 
-## fib_nhg_walk_spec_for_node_quick_fixup
-This is a specific implementation of fib_nhg_walk_spec_func. The caller defines which spec function is utilized before initiating the backwalk; all nodes in a single traversal use the same spec function.
+### `fib_nhg_walk_spec_for_node_quick_fixup()`
+This function provides the Part 1-specific implementation of the `fib_nhg_walk_spec_func` callback. The caller registers this function before initiating the backwalk, ensuring consistent logic across all nodes in a single traversal.
 
-* Input: The current RIBNHGEntry node object.
-* Output: A boolean indicating success.
-    * true: Fixup successful; backwalk could be continued from this node.
-    * false: Fixup not required or failed; backwalk stops. Returns false if the NHG is irrelevant to the target nexthop or has already been updated.
+* Input: Reference to the current `RIBNHGEntry` node.
+* Output: bool indicating traversal continuation.
+  * true: Fixup succeeded; backwalk should continue from this node.
+  * false: Fixup was unnecessary or failed; backwalk halts. Returns false if the NHG is unrelated to the impacted nexthop or has already been updated.
 
-### Main Logic:
-1. Retrieve the list of node IDs this entry depends on.
-2. Determine relevance for update by checking:
-    * If the RIBNHGEntry's gateway address (or its dependents' gateway addresses) matches the impacted nexthop.
-    * If the dependents' m_resolved_enable_group contains disabled paths that have not yet been reflected in the current RIBNHGEntry's m_resolved_enable_group.
-3. If an update is required, iterate through the dependents' list:
-    * Retrieve the dependent RIBNHGEntry via getEntry(uint32_t id).
-    * Inspect the dependent's m_resolved_enable_group to identify disabled paths.
-    * Mark the corresponding paths in the current RIBNHGEntry's m_resolved_enable_group as disabled.
-4. Trigger getNextHopGroupFields() on the current RIBNHGEntry, eventually calling writeToDB() to update APPDB with the remaining enabled paths. This completes the quick fixup for the current entry. Skip APPDB update if it is the only path and need to be disabled.
+#### Execution Logic:
+1. **Dependency Retrieval**: Fetch the list of node IDs that the current entry depends on.
+2. **Relevance Evaluation**: Determine if the node requires an update by checking:
+  * Single-path/Recursive nexthops: Verify if the entry's gateway address matches the impacted nexthop.
+  * ECMP nexthops: Gateway address matching is skipped.
+  * **State Comparison (All cases)**: Check whether any dependents have disabled paths in their m_resolved_enable_group that are not yet reflected in the current node's state (i.e., forward walk results differ from the saved state).
+3. **State Propagation**: If an update is required:
+   * Iterate through the depends list.
+   * Retrieve each dependent RIBNHGEntry via getEntry().
+   * Identify disabled paths in the dependent's m_resolved_enable_group.
+   * Mark the corresponding paths as disabled in the current node's m_resolved_enable_group.
+4. **Database Synchronization**: Invoke `getNextHopGroupFields()` on the current entry, which triggers `writeToDB()` to update APPDB with the remaining enabled paths. This finalizes the quick fixup for the node. Exception: APPDB updates are skipped if the path is the sole remaining member and is being disabled.
 
-TODO: Implement a walk mechanism in the SONiC NHG table.
 
-## fib_nhg_prune_spec_for_node_quick_fixup
-This is a specific implementation of fib_nhg_prune_spec_func. Like the walk spec, this is defined by the caller prior to traversal.
+### `fib_nhg_prune_spec_for_node_quick_fixup()`
+This function implements the Part 1-specific `fib_nhg_prune_spec_func` callback. Like the walk spec, it is registered by the caller prior to traversal.
 
 * Input:
-  * The current RIBNHGEntry node object.
-  * The return value from walking spec.
-* Output: A boolean indicating whether to prune (stop) the backwalk from this node.
+  * Reference to the current `RIBNHGEntry` node.
+  * Boolean return value from the walk spec function.
+* Output: bool indicating whether to prune (halt) the backwalk at this node.
 
-### Main Logic:
-1. If the node was not updated during the walk spec phase, stop the backwalk (no further propagation needed).
-2. If the node represents a SONiC NHG object, stop the backwalk.
+#### Prune Logic:
+* No Update: If the walk spec did not modify the node, halt the backwalk (no further propagation is needed).
 
-# Example
-Assume NHGs form a directed acyclic graph (DAG) through "resolve through" and "resolve via" relationships:
+## Changes for Part 2
+### Motivation
+`RIBNHGEntry` objects used to create SONiC NHG table entries carry VPN context information, whereas NHT-resolved NHGs from Zebra do not. Consequently, a standard backwalk traversal cannot naturally reach these VPN-scoped entries. To bridge this gap, we introduce an explicit lookup mechanism.
 
+### Modifications to `RIBNHGTable` Class
+#### New Field: `m_nexthop_to_RIBNHG_map`
+A new index is added to map a nexthop address string to the set of `RIBNHGEntry*` pointers that reference it:
 ```
-   NHG 239 (fc06::2, Ethernet12)    NHG 244 (fc08::2, Ethernet4)
-         \                              /
-          \                            /
-           +--------+   +------------+
-                    |   |
-                  NHG 243  (resolved NHG for 2064:100::1d and 2064:200::1e)
-                   /    \
-                  /      \
-            NHG 260      NHG 265
-          (via 2064:     (via 2064:
-          100::1d)       200::1e)
-              |               |
-              |               |
-         NHG 264         NHG 267
-       (via 1::1,       (via 1::1)
-        via 2::2)
-              |
-         NHG 275
-       (via 3::3,
-        via 4::4)
+    std::map<std::string, std::set<RIBNHGEntry*>> m_nexthop_to_RIBNHG_map;
 ```
-The processing work flow described above is the following
+#### Supporting APIs
+Three helper methods manage this mapping:
 ```
-NHT Event (nexthop=2064:100::1d, resolved_nhg=243)
-    |
-    v
-fib_nhg_trigger_node_quick_fixup()
-    |
-    +--- Phase 1: fib_nhg_back_walk(243, ctx)
-    |       |
-    |       +---> NHG 243: walk_spec -> not direct match, but starting point
-    |       |     dependents: [260, 265]
-    |       |
-    |       +---> NHG 260 (via 2064:100::1d): walk_spec -> relevant, single path
-    |       |     disable 2064:100::1d path -> skip APPDB (single path)
-    |       |     dependents: [264]
-    |       |
-    |       +---> NHG 265 (via 2064:200::1e): walk_spec -> irrelevant
-    |       |     prune: yes (not updated)
-    |       |
-    |       +---> NHG 264 (via 1::1, via 2::2): walk_spec -> relevant
-    |       |     1::1 depends on 260 (disabled) -> disable 1::1 path
-    |       |     2::2 depends on 265 (still enabled) -> keep
-    |       |     writeToDB() with remaining path 2::2
-    |       |     dependents: [275]
-    |       |
-    |       +---> NHG 275 (via 3::3, via 4::4):
-    |             3::3 depends on 264 (partially disabled) -> check
-    |             4::4 depends on 264 -> already handled
-    |             (continue recursively)
-    |
-    +--- Phase 2: SONiC NHG table lookup (future)
+   void addEntry(const std::string& nexthop, RIBNHGEntry* entry) {
+        m_nexthop_to_RIBNHG_map[nexthop].insert(entry);
+    }
+
+    bool removeEntry(const std::string& nexthop, RIBNHGEntry* entry) {
+        auto it = m_nexthop_to_RIBNHG_map.find(nexthop);
+        if (it == m_nexthop_to_RIBNHG_map.end()) {
+            return false; // Nexthop key doesn't exist
+        }
+
+        // erase() returns 1 if removed, 0 if not found
+        if (it->second.erase(entry) == 0) {
+            return false; // Entry pointer not in the set
+        }
+
+        // 🧹 Clean up: remove the map entry if the set becomes empty
+        if (it->second.empty()) {
+            m_nexthop_to_RIBNHG_map.erase(it);
+        }
+
+        return true;
+    }
+
+    const std::set<RIBNHGEntry*>& getEntries(const std::string& nexthop) const {
+        auto it = m_nexthop_to_RIBNHG_map.find(nexthop);
+        return it != m_nexthop_to_RIBNHG_map.end() ? it->second : emptySet;
+    }
 ```
+#### Integration Points
+* `addEntry()` would be used in `NHGMgr::addNewNHGFull()` when `entry->needCreateSonicObject()` returns true
+* `removeEntry()` would be used in `NHGMgr::delNHGFull()` when `entry->hasSonicGatewayObj()` returns true.
 
-# Test cases
-## Gtest Framework
-The test cases would be created via gtest, and stored in sonic-swss's tests/mock_tests/fpmsyncd as function level test to fib_nhg_trigger_node_quick_fixup().
+### Backwalk for VPN-Scoped RIBNHGEntries
+For each `RIBNHGEntry*` returned by `getEntries(nexthop)`, we explicitly trigger `fib_nhg_back_walk()` to propagate state changes.
 
-The main flow for these set of gtest test cases is
-1. Load topology json, convert json str to fib::NextHopGroupFull object and use  m_rib_fib_nhg_mgr.addNHGFull(nhg, addr_family); to add them one by one to create initial testing senario.
-2. Run through all the test cases designed for this topology.
-   1. For each test case, we need to recover to intital test topology at the end of each test case.
-   2. Based on test case, need to trigger fib_nhg_trigger_node_quick_fixup() accordingly.
-   3. Check updating proper NHGFULL object as indicated. Assert the test case if the condition is not meet.
+#### `fib_nhg_walk_spec_for_node_quick_fixup_sonic_nhg()`
+This variant of the walk spec function is tailored for SONiC NHG updates:
+1. **Scope-Limited Updates**: Only modifies the SONiC NHG representation within the RIBNHGEntry; no changes are made to the PIC (Platform Independent Context) state.
+2. **Deduplication Tracking**: Since multiple `RIBNHGEntry` instances may map to a single SONiC NHG (many-to-one relationship), a new JSON field `updated_sonic_nhg_keys` is added to `walking_ctx_json`. This tracks which SONiC NHG keys have already been updated during the traversal to avoid redundant APPDB writes.
 
+#### `fib_nhg_prune_spec_for_node_quick_fixup_sonic_nhg()`
+This prune spec function currently mirrors the behavior of f`ib_nhg_prune_spec_for_node_quick_fixup()`:
+* Halts traversal if the node was not modified by the walk spec.
+
+Note: Future enhancements may introduce VPN-specific pruning logic if use cases warrant it.
+
+# Examples
 ## Test Topology 1 Global table recursive routes
 Assume we have 2064:100::1d/128 and 2064:200::1e/128 learnt via eBGP. Each route has two paths via fc06::2 and fc08::2
 
@@ -296,13 +432,13 @@ These nexthop's NHGFUll Json objects are stored in test_topology_1.json. The nod
 %%{init: {'theme': 'base', 'themeVariables': {'background': '#ffffff', 'primaryTextColor': '#000000', 'secondaryTextColor': '#000000', 'tertiaryTextColor': '#000000', 'nodeTextColor': '#000000', 'lineColor': '#E6C229', 'edgeLabelBackground': '#ffffff', 'primaryBorderColor': '#cccccc'}}}%%
 graph TD
     %% ───────────── NODE DEFINITIONS ─────────────
-    N234["234"]
-    N237["237"]
+    N234["234, fc08::2"]
+    N237["237, fc06::2"]
     N238["238"]
-    N257["257"]
-    N258["258"]
-    N263["263"]
-    N264["264"]
+    N257["257, 2064:100::1d"]
+    N258["258, 2064:200::1e"]
+    N263["263, 1::1"]
+    N264["264, 2::2"]
     N256["256"]
     N262["262"]
 
@@ -329,60 +465,109 @@ graph TD
     class N257,N258,N263,N264 inter;
     class N256,N262 leaf;
 ```
+Above graph could be presented as the following table
 
-### Test case Local Failure Simulation
-* Scenario 1: The route fc06::2/128 is withdrawn.
-* Trigger: An NHT event is generated containing the nexthop address fc06::2 and the corresponding NHG ID 237.
-* Expected Result:
-  * The following affected Next Hop Groups (NHGs) are updated,
-    * 238
-    * 257
-    * 258
-    * 263
-    * 264
-    * 256
-    * 262
-  * The following Nexthop Groups would not be touched
-    * 234 since it is for fc08::2
-    * 237 since it is a single path
+| NHG | Role | Gateway(s) | Depends | Dependents | m_resolved_enable_group init |
+|:---|:---|:---|:---|:---|:---|
+| 234 | leaf | fc08::2 | -- | [238] | {234: true} (self-ref) |
+| 237 | leaf | fc06::2 | -- | [238] | {237: true} (self-ref) |
+| 238 | core ECMP | fc06::2, fc08::2 | [234, 237] | [257, 258, 263, 264] | {234: true, 237: true} |
+| 257 | intermediate | 2064:100::1d | [238] | [256] | {238: true} |
+| 258 | intermediate | 2064:200::1e | [238] | [256] | {238: true} |
+| 263 | intermediate | 1::1 | [238] | [262] | {238: true} |
+| 264 | intermediate | 2::2 | [238] | [262] | {238: true} |
+| 256 | route 1::1 | composite | [257, 258] | -- | {257: true, 258: true} |
+| 262 | route 3::3 | composite | [263, 264] | -- | {263: true, 264: true} |
+### Local Failure fc06::2 withdrawn
+The NHT event contains "nexthop=fc06::2, resolved_nhg_id=237". 
+FIB triggers the recursive walk via the following order from 237, 237 → 238 → 257 → 258 → 263 → 264 → 256 → 262 (234 never reached -- not in backwalk path from 237)
+
+The detailed handling procedure is the following and the initial modified_set is emptry.
+1. 237 (STARTING, leaf fc06::2):
+  * Match nexthop. Since currently it is up, we need to disable it. Skip APPDB update since it is a single path. Since matching nexthop, Set a flag to indicate all its dependents would be updated, a.k.a skip nexthop check. 
+  * modified_set += {237, true}. True in modified_set indicates this node 237 is modified.
+2. 238 (ECMP, depends [234, 237]):
+  * It is ECMP case, check both paths. 237 is marked as modified.
+  * 237 fully disabled → mark 238's m_resolved_enable_group as {234: true, 237: false}.
+  * Flat: {fc08::2}. APPDB written. modified_set += {238, true}.
+3. 257 (2064:100::1d, depends [238]):
+  * 238 in modified_set and is marked as modified.
+  * Flat: 257 → {fc08::2}. APPDB: {fc08::2}. modified_set += {257, true}.
+4. 258 (2064:200::1e, depends [238]):
+  * 238 in modified_set and is marked as modified.
+  * Flat: 258 → {fc08::2}. APPDB: {fc08::2}. modified_set += {258, true}.
+5. 263 (1::1, depends [238]):
+  * 238 in modified_set and is marked as modified
+  * Flat: 263 → {fc08::2}. APPDB: {fc08::2}. modified_set += {263, true}.
+6. 264 (2::2, depends [238]):
+  * 238 in modified_set and is marked as modified
+  * Flat: 264 → {fc08::2}. APPDB: {fc08::2}. modified_set += {264, true}.
+7. 256 (For route 1::1, depends [257, 258]):
+  * Since both 257 and 258 are in modified_set and is marked as modified
+  * Flat: 256 → {fc08::2}. APPDB: {fc08::2}. modified_set += {256, true}.
+8. 262 (For route 3::3, depends [263, 264]):
+  * Since both 263 and 264 are in modified_set and is marked as modified
+  * Flat: 262 → {fc08::2}. APPDB: {fc08::2}. modified_set += {262, true}.
+
+The final result:
+* Updated nodes: {237, 238, 257, 258, 263, 264, 256, 262} all updated.
 
 
-* Scenario 2: The route 2064:200::1e/128 is updated after zebra handles fc06::2/12 is withdrawn event
-* Trigger: An NHT event is generated containing the nexthop address 2064:200::1e and the corresponding NHG ID 238.
-* Expected Result: No further NHG update since all of them have been updated.
+### Remote Failure 1 (2064:100::1d withdrawn)
+The NHT event contains "nexthop=2064:100::1d, resolved_nhg_id=238". 
+FIB triggers the recursive walk via the following order from 238, 238 → 257 → 258 → 263 → 264 → 256
 
-### Test case Remote Failure Simulation 1
-* Scenario: The route 2064:200::1e/128 is withdrawn.
-* Trigger: An NHT event is generated containing the nexthop address 2064:200::1e and the corresponding NHG ID 238.
-* Expected Result:
-  * The following affected Next Hop Groups (NHGs) are updated,
-    * 238, marked this path is down, although underlay routes are not impacted. This would be needed for updating its dependents.
-    * 257
-    * 258
-    * 263
-    * 264
-    * 256
-    * 262
-  * The following Nexthop Groups would not be touched
-    * 234 since it is for fc08::2
-    * 237 since it is for fc06::2
+The detailed handling procedure is the following and the initial modified_set is emptry.
+1. 238 (STARTING ECMP, depends [234, 237]):
+  * It is ECMP case. continue backwalk. No need to update current node. modified_set += {238, false}.
+2. 257 (2064:100::1d, depends [238]):
+  * Match nexthop. Since currently it is up, we need to disable it. Skip APPDB update since it is a single path.
+  * modified_set += {257, true}.
+3. 258 (2064:200::1e, depends [238]):
+  * No match nexthop, prune the walk from there. modified_set += {258, false}.
+4. 263 (1::1, depends [238]):
+  * No match nexthop, prune the walk from there. modified_set += {263, false}.
+5. 264 (2::2, depends [238]):
+  * No match nexthop, prune the walk from there. modified_set += {264, false}.
+6. 256 (For route 1::1, depends [257, 258]):
+  * Since 257 is in modified_set and it is marked as modified. Need to update 256's APPDB
+  * Flat: 257 → {fc06::2, fc08::2}. APPDB: {fc06::2, fc08::2}. modified_set += {256, true}.
 
+The final result:
+* Updated nodes: {257, 256}
 
-### Test remote failure 2
-* Scenario: The route 1::1/128 is withdrawn.
-* Trigger: An NHT event is generated containing the nexthop address 1::1/128 and the corresponding NHG ID 254.
-* Expected Result:
-  * The following affected Next Hop Groups (NHGs) are updated,
-    * 238, marked this path is down, although underlay routes are not impacted. This would be needed for updating its dependents.
-    * 257
-    * 258
-    * 263
-    * 264
-    * 256
-    * 262
-  * The following Nexthop Groups would not be touched
-    * 234 since it is for fc08::2
-    * 237 since it is for fc06::2
+### Remote Failure 2 (1::1 withdrawn)
+The NHT event contains "nexthop=1::1, resolved_nhg_id=238". 
+FIB triggers the recursive walk via the following order from 238, 238 → 257 → 258 → 263 → 264 → 262
+
+The detailed handling procedure is the following and the initial modified_set is emptry.
+1. 238 (STARTING ECMP, depends [234, 237]):
+  * It is ECMP case. continue backwalk. No need to update current node. modified_set += {238, false}.
+2. 257 (2064:100::1d, depends [238]):
+  * No match nexthop, prune the walk from there. modified_set += {257, false}.
+3. 258 (2064:200::1e, depends [238]):
+  * No match nexthop, prune the walk from there. modified_set += {258, false}.
+4. 263 (1::1, depends [238]):
+  * Match nexthop. Since currently it is up, we need to disable it. Skip APPDB update since it is a single path.
+  * modified_set += {263, true}.
+5. 264 (2::2, depends [238]):
+  * No match nexthop, prune the walk from there. modified_set += {264, false}.
+6. 262 (For route 3::3, depends [263, 264]):
+  * Since 263 is in modified_set and it is marked as modified. Need to update 262's APPDB
+  * Flat: 262 → {fc06::2, fc08::2}. APPDB: {fc06::2, fc08::2}. modified_set += {262, true}.
+
+The final result:
+* Updated nodes: {263, 262}
+
+### Summary of corrected Topology 1 expectations
+
+| Test Case | APPDB Updated | Modified (skip APPDB) | Not Touched |
+|:---|:---|:---|:---|
+| Local Failure (fc06::2) | 238, 257, 258, 263, 264, 256, 262 | 237 | 234 |
+| 2064:100::1d got triggered by NHT from local Failure fc06::2 withdrawn | -- | -- | all others|
+| Remote Failure 1 (2064:100::1d withdrawn) | 256| 257 | all others |
+| Remote Failure 2 (1::1 withdrawn) | 262 | 263 | all others |
+
 
 ## Test Topology 2 Global table recursive routes
 Assume we have 2064:100::1d/128 has two nexthops which are via Ethernet12 and Ethernet4, respectively.
@@ -471,13 +656,13 @@ These nexthop's NHGFUll Json objects are stored in test_topology_2.json. The nod
 %%{init: {'theme': 'base', 'themeVariables': {'background': '#ffffff', 'primaryTextColor': '#000000', 'secondaryTextColor': '#000000', 'tertiaryTextColor': '#000000', 'nodeTextColor': '#000000', 'lineColor': '#E6C229', 'edgeLabelBackground': '#ffffff', 'primaryBorderColor': '#cccccc'}}}%%
 graph TD
     %% Node Definitions
-    N232["232"]
-    N235["235"]
+    N232["232, fc08::2"]
+    N235["235, fc06::2"]
     N236["236"]
-    N270["270"]
-    N266["266"]
-    N260["260"]
-    N264["264"]
+    N270["270, 2::2"]
+    N266["266, 3::3"]
+    N260["260, 2064:100::1d"]
+    N264["264, 2064:200::1e"]
     N263["263"]
     N269["269"]
 
@@ -502,73 +687,107 @@ graph TD
     class N236,N270,N266 mid;
     class N260,N264,N263,N269 leaf;
 ```
+Above graph could be presented as the following table
 
-### Test local failure
-* Scenario: The route fc06::2/128 is withdrawn.
-* Trigger: An NHT event is generated containing the nexthop address fc06::2 and the corresponding NHG ID 235.
-* Expected Result:
-    * The following affected Next Hop Groups (NHGs) are updated,
-      * 236
-      * 270
-      * 266
-      * 260
-      * 264
-      * 269
-      * 263
-    * The following Nexthop Groups would not be touched
-      * 232 since it is for fc08::2
-      * 235 since it is a single path
+| NHG | Role | Gateway(s) | Depends | Dependents | m_resolved_enable_group init |
+|:---|:---|:---|:---|:---|:---|
+| 232 | leaf | `fc08::2` | -- | `[236, 270]` | `{232: true}` (self-ref) |
+| 235 | leaf | `fc06::2` | -- | `[236, 266]` | `{235: true}` (self-ref) |
+| 236 | core ECMP | `fc06::2`, `fc08::2` | `[232, 235]` | `[260, 264]` | `{232: true, 235: true}` |
+| 260 | intermediate | `2064:100::1d` | `[236]` | `[263]` | `{236: true}` |
+| 264 | intermediate | `2064:200::1e` | `[236]` | `[263]` | `{236: true}` |
+| 263 | route 1::1 | composite | `[260, 264]` | -- | `{260: true, 264: true}` |
+| 266 | intermediate | `2::2` | `[235]` | `[269]` | `{235: true}` |
+| 270 | intermediate | `3::3` | `[232]` | `[269]` | `{232: true}` |
+| 269 | route 4::4 | composite | `[266, 270]` | -- | `{266: true, 270: true}` |
+
+### Local Failure (`fc06::2` withdrawn)
+**NHT:** `nexthop=fc06::2`, `resolved_nhg_id=235`
+
+**DFS order from 235:** `235 → 236 → 266 → 260  → 264  → 263 → 269`  
+*(270, 232 never reached -- not in backwalk path from 235)*
+
+1. **235** (STARTING, leaf `fc06::2`):
+   - Match. Self-ref disabled. Skip APPDB. `modified_set += 235`.
+2. **236** (ECMP, depends `[232, 235]`):
+   - Gateway `fc06::2` matches. `235` in `modified_set`.
+   - `235` fully disabled → mark: `{232: true, 235: false}`.
+   - Flat: `{fc08::2}`. APPDB written. `modified_set += 236`.
+3. **266** (via `2::2`, depends `[235]`):
+   - `235` in `modified_set` → relevant!
+   - `235` fully disabled → mark: `{235: false}`. Fully disabled. Skip APPDB.
+   - `modified_set += 266`. Continue to `[269]`.
+4. **260** (`2064:100::1d`, depends `[236]`):
+   - `236` in `modified_set` → relevant!
+   - `236` partially disabled → NOT marked disabled.
+   - Flat: `236 → {fc08::2}`. APPDB: `{fc08::2}`. `modified_set += 260`.
+5. **264** (`2064:200::1e`, depends `[236]`):
+   - `236` in `modified_set` → relevant!
+   - Flat: `236 → {fc08::2}`. APPDB: `{fc08::2}`. `modified_set += 264`.
+   - Dependent `[263]` already visited.
+6. **263** (route 1::1, depends `[260, 264]`):
+   - `260` in `modified_set` → relevant!
+   - Flat: `260 → 236 → {fc08::2}`. `264 → 236 → {fc08::2}`. Dedup: `{fc08::2}`.
+   - APPDB: `{fc08::2}`. `modified_set += 263`.
+7. **269** (route 4::4, depends `[266, 270]`):
+   - `266` in `modified_set` → relevant!
+   - `266` fully disabled → mark: `{266: false, 270: true}`.
+   - Flat: `270` (enabled) → `232 → {fc08::2}`. APPDB: `{fc08::2}`.
+   - `modified_set += 269`.
+
+- **Updated (APPDB):** `236, 260, 264, 263, 269`
+- **Modified (skip APPDB):** `235, 266`
+- **Not touched:** `232, 270`
+
+### Remote Failure 1 (`2064:100::1d` withdrawn)
+**NHT:** `nexthop=2064:100::1d`, `resolved_nhg_id=236`
+
+1. **236** (STARTING): No match, `modified_set` empty. Continue to `[260, 264]`.
+2. **260** (`2064:100::1d`): Gateway MATCHES! `{236: false}`. Fully disabled.
+   - Skip APPDB. `modified_set = {260}`. Continue to `[263]`.
+3. **264** (`2064:200::1e`): `236` not in `modified_set`. No match. Prune.
+4. **263** (route 1::1, depends `[260, 264]`):
+   - `260` in `modified_set` → relevant!
+   - `260` fully disabled → mark: `{260: false, 264: true}`.
+   - Flat: `264 → 236 → {fc06::2, fc08::2}`. APPDB: `{fc06::2, fc08::2}`.
+   - `modified_set += 263`.
+
+- **Updated (APPDB):** `263`
+- **Modified (skip APPDB):** `260`
+- **Not touched:** `236, 232, 235, 264, 266, 270, 269`
 
 
-### Test remote failure 1
-* Scenario: The route 2064:100::1d/128 is withdrawn.
-* Trigger: An NHT event is generated containing the nexthop address 2064:100::1d and the corresponding NHG ID 236.
-* Expected Result:
-    * The following affected Next Hop Groups (NHGs) are updated,
-      * 236, changing to 1 path
-      * 270
-      * 266
-      * 260
-      * 264
-      * 269
-      * 263
-    * The following Nexthop Groups would not be touched
-      * 232 since it is for fc08::2
-      * 235 since it is for fc06::2
+### Remote Failure 2 (`1::1` withdrawn)
+**NHT:** `nexthop=1::1`, `resolved_nhg_id=263`
 
-### Test remote failure 2
-* Scenario: The route 1::1/128 is withdraw.
-* Trigger: An NHT event is generated containing the nexthop address 1::1 and the corresponding NHG ID 263.
-* Expected Result:
-    * The following affected Next Hop Groups (NHGs) are updated,
+1. **263** (STARTING): No gateway match. `modified_set` empty.
+   - Continue to dependents of 263 → NONE. Backwalk ends.
 
-    * The following Nexthop Groups would not be touched
-      * 232 since it is for fc08::2
-      * 235 since it is for fc06::2
-      * 236
-      * 270
-      * 266
-      * 260
-      * 264
-      * 269
-      * 263 would be the starting point
+- **Nothing updated.** 
 
-### Test remote failure 3
-* Scenario: The route 2::2/128 is withdrawn.
-* Trigger: An NHT event is generated containing the nexthop address 2::2 and the corresponding NHG ID 235.
-* Expected Result:
-    * The following affected Next Hop Groups (NHGs) are updated,
-      * 269
+### Remote Failure 3 (`2::2` withdrawn)
+**NHT:** `nexthop=2::2`, `resolved_nhg_id=235`
 
-    * The following Nexthop Groups would not be touched
-      * 232 since it is for fc08::2
-      * 235 since it is for fc06::2, as it is the starting point
-      * 236
-      * 270
-      * 266, recursive via 2::2, but single path.
-      * 260
-      * 264
-      * 263
+1. **235** (STARTING, leaf `fc06::2`): `fc06::2 ≠ 2::2`. No match. Continue to `[236, 266]`.
+2. **236:** `235` not in `modified_set`. No match. Prune.
+3. **266** (via `2::2`): Gateway MATCHES! `{235: false}`. Fully disabled.
+   - Skip APPDB. `modified_set = {266}`. Continue to `[269]`.
+4. **269** (depends `[266, 270]`):
+   - `266` in `modified_set` → relevant!
+   - `266` fully disabled → mark: `{266: false, 270: true}`.
+   - Flat: `270 → 232 → {fc08::2}`. APPDB: `{fc08::2}`.
+
+- **Updated (APPDB):** `269`
+- **Modified (skip APPDB):** `266`
+- **Not touched:** all others
+
+### Summary of corrected Topology 2 expectations:
+| Test Case | APPDB Updated | Modified (skip APPDB) | Not Touched |
+|:---|:---|:---|:---|
+| Local Failure (`fc06::2`) | `236, 260, 264, 263, 269` | `235, 266` | `232, 270` |
+| Remote Failure 1 (`2064:100::1d`) | `263` | `260` | `236, 232, 235, 264, 266, 270, 269` |
+| Remote Failure 2 (`1::1`) | `--` | `--` | all |
+| Remote Failure 3 (`2::2`) | `269` | `266` | all others |
 
 ## Test Topology 3 SRv6 VPN case
 Assume we have 2064:100::1d/128 and 2064:200::1e/128 learnt via eBGP. Each route has two paths via fc06::2 and fc08::2
@@ -679,8 +898,8 @@ graph TD
 
     %% ───────────── CLUSTER 2: Standard ECMP Group ─────────────
     subgraph Std_ECMP [Standard ECMP Group]
-        N234["234 (fc08::2 IfIndex)"]
-        N238["238 (fc06::2 IfIndex)"]
+        N234["234 (fc08::2)"]
+        N238["238 (fc06::2)"]
         N237["237 "]
     end
 
@@ -703,16 +922,39 @@ graph TD
 
 ### Test local failure
 * Scenario: The route fc06::2/128 is withdrawn.
-* Trigger: An NHT event is generated containing the nexthop address fc06::2/128 and the corresponding NHG ID.
+* Trigger: An NHT event is generated containing the nexthop address fc06::2 and the corresponding NHG ID 238.
 * Expected Result:
-  * Update NHG for 2064:100::1d/128
-  * Update NHG for 2064:100::1e/128
-  * No update for SONiC NHG
-
+  * Part 1 starting from node 238
+    1. **235** (STARTING, leaf `fc06::2`):
+        - Match. Self-ref disabled. Skip APPDB. `modified_set += 235`.
+    2. **237** (ECMP, depends `[232, 235]`):
+        - Gateway `fc06::2` matches. `235` in `modified_set`.
+        - `235` fully disabled → mark: `{232: true, 235: false}`.
+        - Flat: `{fc08::2}`. APPDB written. `modified_set += 236`.
+  * Part 2 starting from fc06::2
+    _ no match for fc06::2 in m_nexthop_to_RIBNHG_map
 
 ### Test remote failure
 * Scenario: The route 2064:100::1d/128 is withdrawn.
-* Trigger: An NHT event is generated containing the nexthop address 2064:100::1d/128 and the corresponding NHG ID.
+* Trigger: An NHT event is generated containing the nexthop address 2064:100::1d and the corresponding NHG ID 237.
 * Expected Result:
-  * No Update NHG for 2064:100::1e/128
-  * Update for SONiC NHG
+  * Part 1 starting from node 237
+    - No update
+  * Part 1 starting from node 2064:100::1d
+    - Find NHG node 240 from  m_nexthop_to_RIBNHG_map, trigger fib_nhg_back_walk from this node
+    1. **240** (STARTING, leaf `2064:100::1d`):
+        - Match. Self-ref disabled. Skip APPDB. `modified_set += 240`.
+    2. **239** (ECMP, depends `[240, 241]`):
+        -  `235` in `modified_set`.
+        - `240` fully disabled → mark: `{241: true, 240: false}`.
+        - Update SONiC NHG from node 230: `{2064:200::1e}`. APPDB written. `modified_set += 239`.  
+
+# Test cases
+The test cases would be created via gtest infra, and stored in sonic-swss's tests/mock_tests/fpmsyncd as function level test to fib_nhg_trigger_node_quick_fixup().
+
+The main flow for these set of gtest test cases is
+1. Load topology json, convert json str to fib::NextHopGroupFull object and use  m_rib_fib_nhg_mgr.addNHGFull(nhg, addr_family); to add them one by one to create initial testing senario.
+2. Run through all the test cases designed for this topology.
+   1. For each test case, we need to recover to intital test topology at the end of each test case.
+   2. Based on the test case, need to trigger fib_nhg_trigger_node_quick_fixup() accordingly.
+   3. Check updating proper NHGFULL object as indicated. Assert the test case if the condition is not meet.
