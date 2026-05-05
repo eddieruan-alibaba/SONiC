@@ -1,9 +1,11 @@
 <h1 align="center">RIB FIB Route Convergence Handling LLD </h1>
 
 # Table of Contents <!-- omit in toc -->
-- [Problem Statements](#problem-statements)
-  - [AI Spec for code generating](#ai-spec-for-code-generating)
-- [FRR Modifications](#frr-modifications)
+- [1. Problem Statements](#1-problem-statements)
+- [2. General Code Generation Rules](#2-general-code-generation-rules)
+  - [1. Language Standard](#1-language-standard)
+  - [2. Header Include Paths: Export vs. Internal Files](#2-header-include-paths-export-vs-internal-files)
+- [3. FRR Modifications](#3-frr-modifications)
   - [RNH event information](#rnh-event-information)
     - [Core RNH Tracking Fields](#core-rnh-tracking-fields)
     - [Change Detection Logic](#change-detection-logic)
@@ -12,13 +14,14 @@
     - [Extended Dplane Context](#extended-dplane-context)
     - [RNH Info Structure Definition](#rnh-info-structure-definition)
     - [Event Generation Workflow](#event-generation-workflow)
-  - [FPM Message Serialization (SONiC Integration)](#fpm-message-serialization-sonic-integration)
-- [SONiC-fib Enhancements for NHT events](#sonic-fib-enhancements-for-nht-events)
+- [4. FPM Message Serialization (SONiC Integration)](#4-fpm-message-serialization-sonic-integration)
+- [5. SONiC-fib Enhancements for NHT events](#5-sonic-fib-enhancements-for-nht-events)
   - [NhtEvent JSON Schema](#nhtevent-json-schema)
+    - [Example: nexthop becomes unresolved (Phase 1 trigger)](#example-nexthop-becomes-unresolved-phase-1-trigger)
   - [Generated Code](#generated-code)
   - [C API for FRR Integration](#c-api-for-frr-integration)
   - [Data Flow](#data-flow)
-- [FPMsyncd Modifications](#fpmsyncd-modifications)
+- [6. FPMsyncd Modifications](#6-fpmsyncd-modifications)
   - [Existing NHG MGR codes](#existing-nhg-mgr-codes)
   - [`fib_nhg_trigger_node_quick_fixup()`](#fib_nhg_trigger_node_quick_fixup)
     - [Part 1: Global Table Context Backwalk](#part-1-global-table-context-backwalk)
@@ -40,7 +43,7 @@
     - [`fib_nhg_walk_spec_for_node_quick_fixup_sonic_nhg()`](#fib_nhg_walk_spec_for_node_quick_fixup_sonic_nhg)
     - [`fib_nhg_prune_spec_for_node_quick_fixup_sonic_nhg()`](#fib_nhg_prune_spec_for_node_quick_fixup_sonic_nhg)
     - [Part 2's call flow](#part-2s-call-flow)
-- [Examples](#examples)
+- [7. Examples](#7-examples)
   - [Test Topology 1 Global table recursive routes](#test-topology-1-global-table-recursive-routes)
     - [Local Failure fc06::2 withdrawn](#local-failure-fc062-withdrawn)
     - [Remote Failure 1 (2064:200::1e withdrawn)](#remote-failure-1-20642001e-withdrawn)
@@ -48,38 +51,70 @@
     - [Summary of corrected Topology 1 expectations](#summary-of-corrected-topology-1-expectations)
   - [Test Topology 2 Global table recursive routes](#test-topology-2-global-table-recursive-routes)
     - [Local Failure (`fc06::2` withdrawn)](#local-failure-fc062-withdrawn-1)
-    - [Remote Failure 1 (`2064:100::1d` withdrawn)](#remote-failure-1-20641001d-withdrawn-1)
+    - [Remote Failure 1 (`2064:100::1d` withdrawn)](#remote-failure-1-20641001d-withdrawn)
     - [Remote Failure 2 (`1::1` withdrawn)](#remote-failure-2-11-withdrawn-1)
     - [Remote Failure 3 (`2::2` withdrawn)](#remote-failure-3-22-withdrawn)
     - [Summary of corrected Topology 2 expectations:](#summary-of-corrected-topology-2-expectations)
   - [Test Topology 3 SRv6 VPN case](#test-topology-3-srv6-vpn-case)
     - [Test local failure](#test-local-failure)
     - [Test remote failure](#test-remote-failure)
-- [Test cases](#test-cases)
+- [8. Test cases](#8-test-cases)
+  - [FRR topotest](#frr-topotest)
+  - [sonic-fib unit test](#sonic-fib-unit-test)
+  - [sonic-swss unit test](#sonic-swss-unit-test)
+  - [sonic-mgmt system level tests](#sonic-mgmt-system-level-tests)
+- [9. Appendix:](#9-appendix)
+  - [Key refinements identified during LLM-assisted brainstorming:](#key-refinements-identified-during-llm-assisted-brainstorming)
+  - [First Round Code Genearted](#first-round-code-genearted)
+  - [Couple issues fixed for compiling](#couple-issues-fixed-for-compiling)
+  - [Unit Test issues:](#unit-test-issues)
+    - [Cached bogus pointer](#cached-bogus-pointer)
+    - [Misunderstand m\_nexthop](#misunderstand-m_nexthop)
 
 
-# Problem Statements
+# 1. Problem Statements
 In the current SONiC architecture, orchagent mitigates traffic loss during local port-down events by rapidly removing failed load-balancing members. However, in other failure scenarios, FRR generates a new Next Hop Group (NHG) and migrates dependent prefixes sequentially, causing the traffic loss window to scale linearly with the number of affected prefixes.
 
 To eliminate this prefix-dependent convergence delay, we propose a Prefix-Independent Convergence (PIC) mechanism. When fpmsyncd receives a Next Hop Tracking (NHT) update from zebra, it triggers a targeted reconciliation process. By performing a dependency backwalk from the invalidated NHG, the system identifies all reliant NHGs and applies coordinated updates, bypassing sequential prefix migration. The primary objective is to immediately prune failed forwarding paths to minimize the traffic loss window, allowing the control plane to subsequently recalculate and install optimal routes in the background.
 
-The implementation comprises three core components:
+The implementation comprises Four core components:
 
 * **FRR Modification**: Route all NHT events to the FPM interface exclusively through the dplane subsystem.
+* **SONiC FPM modifications**: convert NHT events to fpm message.
 * **sonic-fib Enhancement**: Introduce a new data schema to map NHT events, capturing both the affected next hop and its corresponding NHG identifier.
 * **fpmsyncd Logic**:  Traverse all dependent NHGs and rapidly reconcile the affected forwarding state.
 
 
-## AI Spec for code generating
+# 2. General Code Generation Rules
 This Low-Level Design (LLD) is deliberately authored with implementation-grade specificity to function as a high-fidelity prompt for LLM-powered code generation tools (e.g., Qoder CLI: https://qoder.com/en/cli). The goal is to enable reliable, specification-to-code automation with minimal ambiguity.
 
-Key refinements identified during LLM-assisted brainstorming:
-* **Intermediate Verification**: The LLM can emit step-by-step intermediate states to validate the correctness of recursive call outcomes.
-* **Idempotency Clarification**: The LLM flagged a potential idempotency concern, prompting us to explicitly scope Phase 1 support to RNH transitions only into the unresolved state.
-* **Trace-Driven Validation**: The LLM generates structured call flow trace artifacts and can cross-validate them against the step-by-step intermediate results to ensure behavioral consistency.
-* **topology json error**: Flagged topology json error with missing nexthop type and gate in topology 2's json after LLM comparing LLD with json file file.
+## 1. Language Standard
+  * C++14 is the required baseline for all SONiC C++ components (sonic-swss, sonic-fib, swss-common, etc.).
+  * Do not use C++17/20 features unless the target branch explicitly migrates.
+## 2. Header Include Paths: Export vs. Internal Files
+When generating code for Debian-packaged components, distinguish between public export headers and internal implementation files:'**
+| File Type | Purpose | Include Path Style | Example |
+|-----------|---------|-------------------|---------|
+| **Export Header** | Installed to `/usr/include/...` for external consumers | Use **installed/public paths** (no `src/` prefix) | `#include "nexthopgroupfull.h"` |
+| **Internal Source** | Compiled within the package; not installed | Use **relative build-tree paths** (e.g., `src/`) | `#include "src/nexthopgroupfull.h"` |
 
-# FRR Modifications
+**Examples**:
+```
+// ✅ nexthopgroupfull_json.h (export header — installed)
+#include "nexthopgroupfull.h"  // Resolves to /usr/include/nexthopgroupfull.h
+
+// ✅ nexthopgroup_capi.cpp (internal implementation)
+#include "src/nexthopgroupfull.h"
+#include "src/nexthopgroupfull_json.h"
+#include "src/c_nexthopgroupfull.h"
+#include "src/nexthopgroup_debug.h"
+```
+
+Critical: Mixing these styles causes build failures:
+* Export headers using src/ paths → break downstream consumers (file not found at install time).
+* Internal files using flat paths → may conflict with system headers or fail in-tree builds.
+
+# 3. FRR Modifications
 This section outlines modifications to FRRouting (FRR) to enhance Next Hop Tracking (NHT) event propagation from Zebra to the dplane, enabling fpmsyncd to respond proactively to nexthop changes and minimize traffic loss during convergence.
 
 ## RNH event information
@@ -92,6 +127,10 @@ Each rnh (Route Next Hop) structure maintains the following state for change det
 | Resolved Route Prefix | The prefix of the route currently resolving the tracked prefix | rnh->resolved_route |
 | Resolution State | The active route_entry used to resolve the tracked prefix | rnh->state |
 
+Memory Lifetime Warning:
+The function copy_state() frees the existing resolution state (rnh->state) before assigning the new state. Therefore:
+❌ Do NOT cache rnh->state as a pointer before calling copy_state() and dereference it afterward. The pointer becomes dangling.
+✅ DO extract and cache any required fields (e.g., nhg_id) before invoking copy_state(), since primitive values remain valid independent of memory lifecycle.
 
 ### Change Detection Logic
 The function zebra_rnh_eval_nexthop_entry() in https://github.com/FRRouting/frr/blob/master/zebra/zebra_rnh.c#L785 evaluates whether an incoming route update affects an RNH by comparing:
@@ -169,7 +208,7 @@ struct dplane_rnh_info {
 
 We need to create a new function to populate dplane_rnh_info, then put the ctx into the queue. This new function would be triggered from zebra_rnh_eval_nexthop_entry() once we find there is some changes in this rnh. 
 
-## FPM Message Serialization (SONiC Integration)
+# 4. FPM Message Serialization (SONiC Integration)
 In fpm_nl_enqueue() https://github.com/sonic-net/sonic-buildimage/blob/master/src/sonic-frr/dplane_fpm_sonic/dplane_fpm_sonic.c#L2451, add a case handler for the new operation:
 ```
 case DPLANE_OP_NHT_EVENT_UPDATE:
@@ -180,7 +219,7 @@ case DPLANE_OP_NHT_EVENT_UPDATE:
 ```
 The FPM message format for NHT_EVENT_UPDATE must be defined in the sonic-fib interface definition, ensuring alignment between FRR's dplane output and fpmsyncd's ingestion logic.
 
-# SONiC-fib Enhancements for NHT events
+# 5. SONiC-fib Enhancements for NHT events
 A new JSON schema `NhtEvent.json` is added to the [sonic-fib](https://github.com/eddieruan-alibaba/sonic-fib) repository, following the same template-driven generation pattern as `NextHopGroupFull.json`.
 
 ## NhtEvent JSON Schema
@@ -254,9 +293,7 @@ fpm_nl_enqueue()
                                                        prev_resolved_nhg_id)
 ```
 
-Full design details are in `docs/alinos/specs/2026-05-02-nht-event-schema-design.md`.
-
-# FPMsyncd Modifications
+# 6. FPMsyncd Modifications
 The input data for this NHT event is detailed in the preceding sections. Under the Phase 1 approach, FPMsyncd will invoke fib_nhg_trigger_node_quick_fixup() when current_resolved_nhg_id is zero, indicating that the tracked nexthop address cannot be resolved. Additional scenarios will be addressed in future updates.
 
 ## Existing NHG MGR codes
@@ -277,7 +314,7 @@ The function performs two primary operations:
 Uses the incoming resolved NHG ID to trigger a backwalk that updates all relevant NHGs in the global table context.
 
 It initializes a `fib_nhg_walking_ctx` structure with the following configuration:
-* **Walk context**: It is a json data structure which could store various information during the walk. For example 
+* **Walk context**: It is a structure which could store various information during the walk. For example 
   * A `visited_node_set`. It starts with an empty set. The visited node set would be added later one by one. Each entry tracks a node ID and a boolean flag indicating whether the node was modified during traversal. 
     * *Note: Even if a node is already present in the visited set, the algorithm may still initiate a forward walk to its dependents to propagate any pending updates.*
   * A `modified_node_set`. It starts with an empty set. When walk_spec applies a fixup to a node (gateway match or depends propagation), that node ID is added to modified_node_set. Downstream nodes check whether any of their depends entries appear in modified_node_set to determine relevance.
@@ -292,7 +329,7 @@ Finally, the function initiates the traversal by calling `fib_nhg_back_walk()`, 
 ### Part 2: VPN Context Backwalk
 Uses the incoming nexthop address to locate all `RIBHNGEntry` instances that reference it across different VPN contexts. The function iterates through each matching entry and triggers a backwalk from that node to update the corresponding SONiC NHGs.
 
-*Note*: 
+**Note**: 
 1. Currently, backwalks are not initiated using the original NHG ID. This capability may be introduced in future updates once specific use cases are validated.
 2. Since these NHG have VPN contexts, we can't use part 1's walk to reach these nodes. 
 
@@ -360,6 +397,31 @@ Need to add a new field m_resolved_enable_group to track if resolved NHG is enab
          *   after depends-based population so walk_spec can mark the leaf disabled.
          */
         unordered_map<uint32_t, bool> m_resolved_enable_group;
+```
+
+* New Field: `m_gateway`
+Need to add a new string field `m_gateway` to store NHG's gateway address in single path or recursive case. In single path case, `m_gateway` is the same as `m_nexthop`. But in recursive case, `m_gateway` is the recursive nexthop address, while `m_nexthop` stores this NHG's final resolved nexthop addresses.
+```
+
+        /*
+         * Gateway  str in FV vector of the entry
+         */
+        string m_gateway = "";
+```
+Need to create an accessing api for this m_gateway. It would be used during convergence backwalk. 
+```
+string RIBNHGEntry::getGatewayAddress() {
+    return m_gateway;
+}
+```
+
+This field is populated from nexthopgroupfull's gate field, when its type is specified, a.k.a recursive or single path case. 
+```
+    if (nhg.type == fib::NEXTHOP_TYPE_IPV6 || nhg.type == fib::NEXTHOP_TYPE_IPV6_IFINDEX ||
+        nhg.type == fib::NEXTHOP_TYPE_IPV4 || nhg.type == fib::NEXTHOP_TYPE_IPV4_IFINDEX) {
+        m_gateway = gaddr_to_string(nhg.gate, nhg.type);
+        SWSS_LOG_DEBUG("gateway address: %s", m_gateway.c_str());
+    }
 ```
 
 **Self-reference initialization**: When populating `m_resolved_enable_group`, iterate the depends list and set each entry to `true`. For leaf NHGs (`depends.empty()`), add `{self_id, true}` as a self-reference so the entry has a state that walk_spec can set to `false` when the gateway matches.
@@ -608,7 +670,7 @@ sequenceDiagram
     end
 ```
 
-# Examples
+# 7. Examples
 ## Test Topology 1 Global table recursive routes
 Assume we have 2064:100::1d/128 and 2064:200::1e/128 learnt via eBGP. Each route has two paths via fc06::2 and fc08::2
 
@@ -1301,7 +1363,14 @@ Part 2 backwalk from 240 (using `walk_spec_sonic_nhg` / `prune_spec_sonic_nhg`):
 | 2 | back_walk(239) | ECMP. Depends [240, 241]. 240 fully disabled -> mark {240:false, 241:true}. 240 in modified_set -> relevant. Regen SONiC NHG: {2064:200::1e}. | true | not pruned (modified) | yes -> dependents=[] | SONiC NHG: {2064:200::1e} | {240, 239} |
 
 
-# Test cases
+# 8. Test cases
+## FRR topotest
+TODO
+
+## sonic-fib unit test
+Generated via LLM
+
+## sonic-swss unit test
 The test cases would be created via gtest infra, and stored in sonic-swss's tests/mock_tests/fpmsyncd as function level test to fib_nhg_trigger_node_quick_fixup().
 
 The main flow for these set of gtest test cases is
@@ -1310,3 +1379,94 @@ The main flow for these set of gtest test cases is
    1. For each test case, we need to recover to intital test topology at the end of each test case.
    2. Based on the test case, need to trigger fib_nhg_trigger_node_quick_fixup() accordingly.
    3. Check updating proper NHGFULL object as indicated. Assert the test case if the condition is not meet.
+
+## sonic-mgmt system level tests
+TODO
+
+# 9. Appendix:
+This section documents all the issues met when using LLM to brainstorm, code generation, compile and testing.
+
+## Key refinements identified during LLM-assisted brainstorming:
+* **Intermediate Verification**: The LLM can emit step-by-step intermediate states to validate the correctness of recursive call outcomes.
+* **Idempotency Clarification**: The LLM flagged a potential idempotency concern, prompting us to explicitly scope Phase 1 support to RNH transitions only into the unresolved state.
+* **Trace-Driven Validation**: The LLM generates structured call flow trace artifacts and can cross-validate them against the step-by-step intermediate results to ensure behavioral consistency.
+* **topology json error**: Flagged topology json error with missing nexthop type and gate in topology 2's json after LLM comparing LLD with json file file.
+
+## First Round Code Genearted
+| Repo | link | Comments |Unit Test cases |
+|:-----|:---------------|:---------------------|:-----------------|
+| sonic-frr | https://github.com/eddieruan-alibaba/sonic-frr/tree/eruan-ai | AI codes with fixing `Cached bogus pointer` | No, need to add topotest |
+| sonic-buildimage | https://github.com/eddieruan-alibaba/sonic-buildimage/tree/eruan-ai | AI codes with fixing header including path | n/a |
+| sonic-fib | https://github.com/eddieruan-alibaba/sonic-fib/tree/eruan-ai | AI codes with fixing header including path | Yes, included |
+| sonic-swss | https://github.com/eddieruan-alibaba/sonic-swss/tree/eruan-ai2 | AI codes with C++ 14 fix and `Misunderstand m_nexthop`'s fix | Yes, included |
+
+## Couple issues fixed for compiling
+* Language Standard, C++14 vs C++17, See the [Language Standard](#1-language-standard) section
+* Header Include Paths: Export vs. Internal Files, See the [Include Path Rules](#2-header-include-paths-export-vs-internal-files) section
+
+## Unit Test issues:
+###  Cached bogus pointer
+In commit https://github.com/eddieruan-alibaba/sonic-frr/commit/53b7503dec00d3b3889e57c061b22de6b46a793d#diff-4bc931e0979fe77074f30df99e44b72472dc4b143a84a2929933d017bde5ce0d, AI generated codes the caches a pointer to a `struct route_entry`.
+```
+struct route_entry *old_re = rnh->state;
+```
+
+However, this pointer is invalidated during the execution of `copy_state()`, which explicitly frees the existing state:
+```
+static void copy_state(struct rnh *rnh, const struct route_entry *re,
+		       struct route_node *rn)
+{
+	struct route_entry *state;
+
+	if (rnh->state) {
+		free_state(rnh->vrf_id, rnh->state, rn);
+		rnh->state = NULL;
+	}
+
+	if (!re)
+		return;
+
+```
+
+Accessing the cached pointer after copy_state() results in undefined behavior. In practice, this causes incorrect prev_nhg_id values in Zebra logs:
+
+```
+2026/05/05 17:45:52 ZEBRA: [JZW23-YKRTG] NHT event: rnh=2064:100::1d/128 prev_pfx=2064:100::1d/128 prev_nhg=463787600 curr_pfx=::/0 curr_nhg=0
+```
+
+**Resolution**:
+Update the design specification to explicitly forbid caching route_entry pointers across state-copy operations. Instead, cache primitive values (e.g., nhg_id) which remain valid regardless of memory reallocation.
+
+**Process Reflection**:
+We need to analyze why this memory lifecycle detail was missed during the code generation. If LLM-assisted development requires the spec to explicitly describe every low-level memory management constraint, it implies that spec authors must possess deep implementation-level knowledge. We need to determine if this level of granularity is sustainable for future developing.
+
+###  Misunderstand m_nexthop
+LLM misunderstood m_nexthop's meaning and created the following API for getting NHG's gateway address 
+```
+string RIBNHGEntry::getGatewayAddress() {
+    return m_nexthop;
+}
+```
+
+Then use this api in the following walk spec, which is not correct.
+```
+    /* Step 2: Relevance check — gateway match */
+    string gateway = entry->getGatewayAddress();
+    if (!gateway.empty() && gateway == ctx.nexthop_address) {
+        if (depends.empty()) {
+            /* Leaf NHG: mark self-reference disabled, skip APPDB write */
+            enable_group[entry_id] = false;
+            ctx.modified_node_set.insert(entry_id);
+            SWSS_LOG_NOTICE("walk_spec: leaf node %d gateway match, disabled self", entry_id);
+            return true;
+        } else {
+            /* Non-leaf with gateway match: mark ALL depends disabled */
+            for (auto& kv : enable_group) {
+                kv.second = false;
+            }
+            is_relevant = true;
+        }
+    }
+```
+**Resolution**:
+The fix is to update this LLD spec to add `m_gateway` field explictly. 
