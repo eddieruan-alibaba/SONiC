@@ -1384,51 +1384,160 @@ The main flow for these set of gtest test cases is
    3. Check updating proper NHGFULL object as indicated. Assert the test case if the condition is not meet.
 
 ## sonic-mgmt system level tests
-In current songic-mgmt, https://github.com/sonic-net/sonic-mgmt/blob/master/tests/srv6/test_srv6_basic_sanity.py provides a system level test with 7 nodes topology. The previous example's three Topologies are built from this 7 nodes topology. 
+In current sonic-mgmt, https://github.com/sonic-net/sonic-mgmt/blob/master/tests/srv6/test_srv6_basic_sanity.py provides a system level test with 7 nodes topology. The previous example's three Topologies are built from this 7 nodes topology. Tests are added to the existing `test_srv6_basic_sanity.py` file with helpers in `srv6_utils.py`.
 
-### Helper function
-1. Create a function apply_config_cmmds_to_vtysh(cmd_list) in srv6_utils.py 
-The code base is at https://github.com/sonic-net/sonic-mgmt/blob/master/tests/srv6/srv6_utils.py
+### 7-Node Topology Key Connections
 
-Input:
-cmd_list: a list of an array of string, which provide a list of commands needed to be run.
-nbrhost: the device node which needs to apply these commands
+| Node | Interface | IP | Peer Node | Peer Interface | Peer IP | Role |
+|------|-----------|-----|-----------|----------------|---------|------|
+| PE3 (DUT) | Ethernet12 | fc06::1 | P4 | Ethernet12 | fc06::2 | Local path |
+| PE3 (DUT) | Ethernet4 | fc08::1 | P2 | Ethernet12 | fc08::2 | Local path |
+| PE1 | Ethernet0 | fc00::72 | P1 | Ethernet112 | fc00::71 | PE1 uplink |
+| PE1 | Ethernet4 | fc02::1 | P3 | Ethernet4 | fc02::2 | PE1 uplink |
+| PE2 | Ethernet0 | fc00::76 | P1 | Ethernet116 | fc00::75 | PE2 uplink |
+| PE2 | Ethernet8 | fc03::1 | P3 | Ethernet8 | fc03::2 | PE2 uplink |
 
-Functionality:
-This function would loop through cmd_list and use the following format to apply intput_cmd from cmd_list to the vtysh configuration.
+### Route Origins
 
+| Prefix | Origin Node | Reaches PE3 via |
+|--------|-------------|-----------------|
+| 2064:100::1d/128 | PE1 | P1/P3 → P2(fc08::2) + P4(fc06::2) |
+| 2064:200::1e/128 | PE2 | P1/P3 → P2(fc08::2) + P4(fc06::2) |
+
+Both prefixes have 2-path ECMP at PE3: via fc06::2 (Ethernet12→P4) and fc08::2 (Ethernet4→P2).
+
+### Helper Functions
+
+All helper functions are added to `tests/srv6/srv6_utils.py`:
+
+#### 1. apply_config_cmmds_to_vtysh(nbrhost, cmd_list)
+
+```python
+def apply_config_cmmds_to_vtysh(nbrhost, cmd_list):
+    """Apply a list of vtysh configuration-mode commands to a device."""
+    for input_cmd in cmd_list:
+        cmd = "vtysh -c 'configure terminal' -c '{}'".format(input_cmd)
+        nbrhost.command(cmd)
 ```
-    cmd = "vtysh -c 'configure terminal' -c '{}'".format(input_cmd)
-    nbrhost.command(cmd)
+
+#### 2. Record Collection
+
+```python
+def start_record_collection(duthost, testcase_name):
+    """Start tailing swss.rec and sairedis.rec on DUT."""
+    for rec in ["swss.rec", "sairedis.rec"]:
+        prefix = rec.replace(".rec", "")
+        outfile = "/tmp/{}_{}.rec".format(prefix, testcase_name)
+        duthost.command(
+            "nohup tail -f /var/log/swss/{} > {} 2>&1 &".format(rec, outfile))
+
+def stop_record_collection(duthost, testcase_name):
+    """Stop record collection and copy files to ~/testlogs/."""
+    duthost.command("pkill -f 'tail -f /var/log/swss'")
+    duthost.command("mkdir -p ~/testlogs")
+    for prefix in ["swss", "sairedis"]:
+        src = "/tmp/{}_{}.rec".format(prefix, testcase_name)
+        duthost.command("cp {} ~/testlogs/".format(src))
 ```
 
-2. Collect record files
-On each node's /var/log/swss directory, we have sairedis.rec  swss.rec two files.
+#### 3. APPDB Assertion Helpers
 
-What we want to do is the following
-1. Before running each test case, we want to tail them into a swss_<testcase name>.rec and sairedis_<testcase name>.rec
-2. After running each test case, we want to stop this tail function and copy them into ~/testlogs/ directory. 
+```python
+def assert_appdb_nexthop_removed(duthost, nexthop, timeout=10, poll_interval=1):
+    """Poll APPDB until nexthop is absent from ALL NHG entries' nexthop field."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        result = duthost.command("redis-cli -n 0 KEYS 'NEXTHOP_GROUP_TABLE:*'")
+        keys = parse_appdb_keys(result)
+        found = False
+        for key in keys:
+            nh_result = duthost.command("redis-cli -n 0 HGET '{}' nexthop".format(key))
+            nh_value = nh_result.get('stdout', '')
+            if nexthop in nh_value:
+                found = True
+                break
+        if not found:
+            return  # success
+        time.sleep(poll_interval)
+    pytest_assert(False, "Nexthop '{}' still present in APPDB after {}s".format(nexthop, timeout))
 
-Need to create some python util functions in srv6_utils.py for this purpose.
+def assert_appdb_nexthop_present(duthost, nexthop):
+    """Assert nexthop exists in at least one NHG entry."""
+    result = duthost.command("redis-cli -n 0 KEYS 'NEXTHOP_GROUP_TABLE:*'")
+    keys = parse_appdb_keys(result)
+    for key in keys:
+        nh_result = duthost.command("redis-cli -n 0 HGET '{}' nexthop".format(key))
+        nh_value = nh_result.get('stdout', '')
+        if nexthop in nh_value:
+            return  # found
+    pytest_assert(False, "Nexthop '{}' not found in any APPDB NHG entry".format(nexthop))
+```
 
+### Failure Triggers
+
+| Test Case | Mechanism | Nodes Affected | Expected NHT Event |
+|-----------|-----------|----------------|-------------------|
+| **Local failure** | PE3: `sudo ifconfig Ethernet12 down` | PE3 link-down | fc06::2 unreachable, `current_resolved_nhg_id=0` |
+| **Remote failure** | P1: `sudo ifconfig Ethernet112 down` + P3: `sudo ifconfig Ethernet4 down` | PE1 isolated | 2064:100::1d withdrawn, `current_resolved_nhg_id=0` |
+
+**Why this remote failure mechanism works**: PE1 has only two uplinks: Ethernet0→P1 and Ethernet4→P3. Shutting down the peer-side interfaces (P1:Ethernet112 + P3:Ethernet4) causes immediate link-down detection on PE1. BGP sessions drop within seconds (link-level, no 180s hold timer wait). PE1's originated route (2064:100::1d) is withdrawn from the network. No BFD is available in this topology.
+
+### Recovery
+
+| Failure | Recovery Command | Wait Time |
+|---------|-----------------|-----------|
+| Local | PE3: `sudo ifconfig Ethernet12 up` | 10s |
+| Remote | P1: `sudo ifconfig Ethernet112 up` + P3: `sudo ifconfig Ethernet4 up` | 15s |
+
+### Assertions
+
+| Test Case | Assert ABSENT from nexthop field | Assert PRESENT in nexthop field | Timeout |
+|-----------|--------------------------------|-------------------------------|---------|
+| T1 Local (fc06::2 down) | `fc06::2` | `fc08::2` | 10s |
+| T1 Remote (PE1 isolated) | `2064:100::1d` | `2064:200::1e` | 30s |
+| T2 Local (fc06::2 down) | `fc06::2` | `fc08::2` | 10s |
+| T2 Remote (PE1 isolated) | `2064:100::1d` | `2064:200::1e` | 30s |
 
 ### Test Cases
-We will create test cases for Topology 1 and Topology 2 above
 
-The main test work flow is
+We create 4 independent test cases for Topology 1 and Topology 2. Each test:
+- Sets up its own topology (static routes via vtysh)
+- Verifies initial state before triggering failure
+- Asserts APPDB convergence after failure
+- Cleans up (recover + remove routes)
 
-1.  Use apply_config_cmmds_to_vtysh() to set up needed configurations
-2.  Run local fail test case
-    1.  Enable collecting swss and sairedis record file
-    2.  Issue "sudo ifconfig Ethernet12 down" on PE3
-    3.  Disable collecting swss and sairedis record file
-    4.  Issue "sudo ifconfig Ethernet12 up" on PE3
-3. Run Remote fail 1 test case
-    1.  Enable collecting swss and sairedis record file
-    2.  Issue "sudo ifconfig Ethernet0 down" and "sudo ifconfig Ethernet4 down" on PE1
-    3.  Disable collecting swss and sairedis record file
-    4.  Issue  sudo ifconfig Ethernet0 down" and "sudo ifconfig Ethernet4 down" on PE1
-4. Use apply_config_cmmds_to_vtysh() to set up needed Step 1's reverse configurations to recover
+#### Topology 1 Static Routes (applied on PE3)
+```
+ipv6 route 1::1/128 2064:100::1d
+ipv6 route 1::1/128 2064:200::1e
+ipv6 route 2::2/128 2064:200::1e
+ipv6 route 3::3/128 1::1
+ipv6 route 3::3/128 2::2
+ipv6 route 4::4/128 1::1
+```
+
+#### Topology 2 Static Routes (applied on PE3)
+```
+ipv6 route 1::1/128 2064:100::1d
+ipv6 route 1::1/128 2064:200::1e
+ipv6 route 2::2/128 fc06::2
+ipv6 route 3::3/128 fc08::2
+ipv6 route 4::4/128 2::2
+ipv6 route 4::4/128 3::3
+```
+
+#### Test workflow per test case
+
+1. Apply static routes on PE3 via `apply_config_cmmds_to_vtysh()`
+2. Wait 5s for NHG convergence
+3. Verify initial state: both nexthops present in APPDB
+4. Start record collection
+5. Trigger failure (local: `ifconfig Ethernet12 down` on PE3; remote: `ifconfig Ethernet112 down` on P1 + `ifconfig Ethernet4 down` on P3)
+6. Assert APPDB convergence (poll with timeout)
+7. Stop record collection
+8. Verify record patterns (NEXTHOP_GROUP_TABLE operations present)
+9. Recover (bring interfaces back up), wait for reconvergence
+10. Teardown: remove static routes via `no ipv6 route ...`
 
 # 9. Appendix
 This section documents all the issues met when using LLM to brainstorm, code generation, compile and testing. The main skills are similar to skills listed in https://github.com/obra/superpowers/tree/main/skills and https://github.com/numman-ali/openskills. At high level, we use brainstorm skill to go over LLD in detail and use writing-plan skill to generate codes after brainstorming.
