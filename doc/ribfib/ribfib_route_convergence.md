@@ -63,13 +63,16 @@
   - [sonic-fib unit test](#sonic-fib-unit-test)
   - [sonic-swss unit test](#sonic-swss-unit-test)
   - [sonic-mgmt system level tests](#sonic-mgmt-system-level-tests)
-- [9. Appendix:](#9-appendix)
+    - [Helper function](#helper-function)
+    - [Test Cases](#test-cases)
+- [9. Appendix](#9-appendix)
   - [Key refinements identified during LLM-assisted brainstorming:](#key-refinements-identified-during-llm-assisted-brainstorming)
   - [First Round Code Genearted](#first-round-code-genearted)
   - [Couple issues fixed for compiling](#couple-issues-fixed-for-compiling)
   - [Unit Test issues:](#unit-test-issues)
     - [Cached bogus pointer](#cached-bogus-pointer)
     - [Misunderstand m\_nexthop](#misunderstand-m_nexthop)
+    - [Not handle IBNHGEntry::getNextHopGroupFields()'s change paths based on m\_resolved\_enable\_group](#not-handle-ibnhgentrygetnexthopgroupfieldss-change-paths-based-on-m_resolved_enable_group)
 
 
 # 1. Problem Statements
@@ -1381,10 +1384,54 @@ The main flow for these set of gtest test cases is
    3. Check updating proper NHGFULL object as indicated. Assert the test case if the condition is not meet.
 
 ## sonic-mgmt system level tests
-TODO
+In current songic-mgmt, https://github.com/sonic-net/sonic-mgmt/blob/master/tests/srv6/test_srv6_basic_sanity.py provides a system level test with 7 nodes topology. The previous example's three Topologies are built from this 7 nodes topology. 
 
-# 9. Appendix:
-This section documents all the issues met when using LLM to brainstorm, code generation, compile and testing.
+### Helper function
+1. Create a function apply_config_cmmds_to_vtysh(cmd_list) in srv6_utils.py 
+The code base is at https://github.com/sonic-net/sonic-mgmt/blob/master/tests/srv6/srv6_utils.py
+
+Input:
+cmd_list: a list of an array of string, which provide a list of commands needed to be run.
+nbrhost: the device node which needs to apply these commands
+
+Functionality:
+This function would loop through cmd_list and use the following format to apply intput_cmd from cmd_list to the vtysh configuration.
+
+```
+    cmd = "vtysh -c 'configure terminal' -c '{}'".format(input_cmd)
+    nbrhost.command(cmd)
+```
+
+2. Collect record files
+On each node's /var/log/swss directory, we have sairedis.rec  swss.rec two files.
+
+What we want to do is the following
+1. Before running each test case, we want to tail them into a swss_<testcase name>.rec and sairedis_<testcase name>.rec
+2. After running each test case, we want to stop this tail function and copy them into ~/testlogs/ directory. 
+
+Need to create some python util functions in srv6_utils.py for this purpose.
+
+
+### Test Cases
+We will create test cases for Topology 1 and Topology 2 above
+
+The main test work flow is
+
+1.  Use apply_config_cmmds_to_vtysh() to set up needed configurations
+2.  Run local fail test case
+    1.  Enable collecting swss and sairedis record file
+    2.  Issue "sudo ifconfig Ethernet12 down" on PE3
+    3.  Disable collecting swss and sairedis record file
+    4.  Issue "sudo ifconfig Ethernet12 up" on PE3
+3. Run Remote fail 1 test case
+    1.  Enable collecting swss and sairedis record file
+    2.  Issue "sudo ifconfig Ethernet0 down" and "sudo ifconfig Ethernet4 down" on PE1
+    3.  Disable collecting swss and sairedis record file
+    4.  Issue  sudo ifconfig Ethernet0 down" and "sudo ifconfig Ethernet4 down" on PE1
+4. Use apply_config_cmmds_to_vtysh() to set up needed Step 1's reverse configurations to recover
+
+# 9. Appendix
+This section documents all the issues met when using LLM to brainstorm, code generation, compile and testing. The main skills are similar to skills listed in https://github.com/obra/superpowers/tree/main/skills and https://github.com/numman-ali/openskills. At high level, we use brainstorm skill to go over LLD in detail and use writing-plan skill to generate codes after brainstorming.
 
 ## Key refinements identified during LLM-assisted brainstorming:
 * **Intermediate Verification**: The LLM can emit step-by-step intermediate states to validate the correctness of recursive call outcomes.
@@ -1470,3 +1517,9 @@ Then use this api in the following walk spec, which is not correct.
 ```
 **Resolution**:
 The fix is to update this LLD spec to add `m_gateway` field explictly. 
+
+###  Not handle IBNHGEntry::getNextHopGroupFields()'s change paths based on m_resolved_enable_group
+```
+Method Update: RIBNHGEntry::getNextHopGroupFields()
+Before recursing into each depends entry in m_resolvedGroup, check m_resolved_enable_group: if the depends entry is marked false (disabled), skip it. This produces the correct flat resolved paths reflecting the current enable/disable state at every level of the dependency chain.
+```
