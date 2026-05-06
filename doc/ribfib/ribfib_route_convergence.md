@@ -63,8 +63,19 @@
   - [sonic-fib unit test](#sonic-fib-unit-test)
   - [sonic-swss unit test](#sonic-swss-unit-test)
   - [sonic-mgmt system level tests](#sonic-mgmt-system-level-tests)
-    - [Helper function](#helper-function)
+    - [7-Node Topology Key Connections](#7-node-topology-key-connections)
+    - [Route Origins](#route-origins)
+    - [Helper Functions](#helper-functions)
+      - [1. apply\_config\_cmmds\_to\_vtysh(nbrhost, cmd\_list)](#1-apply_config_cmmds_to_vtyshnbrhost-cmd_list)
+      - [2. Record Collection](#2-record-collection)
+      - [3. APPDB Assertion Helpers](#3-appdb-assertion-helpers)
+    - [Failure Triggers](#failure-triggers)
+    - [Recovery](#recovery)
+    - [Assertions](#assertions)
     - [Test Cases](#test-cases)
+      - [Topology 1 Static Routes (applied on PE3)](#topology-1-static-routes-applied-on-pe3)
+      - [Topology 2 Static Routes (applied on PE3)](#topology-2-static-routes-applied-on-pe3)
+      - [Test workflow per test case](#test-workflow-per-test-case)
 - [9. Appendix](#9-appendix)
   - [Key refinements identified during LLM-assisted brainstorming:](#key-refinements-identified-during-llm-assisted-brainstorming)
   - [First Round Code Genearted](#first-round-code-genearted)
@@ -1555,7 +1566,7 @@ This section documents all the issues met when using LLM to brainstorm, code gen
 | sonic-buildimage | https://github.com/eddieruan-alibaba/sonic-buildimage/tree/eruan-ai | AI codes with fixing header including path | n/a |
 | sonic-fib | https://github.com/eddieruan-alibaba/sonic-fib/tree/eruan-ai | AI codes with fixing header including path | Yes, included |
 | sonic-swss | https://github.com/eddieruan-alibaba/sonic-swss/tree/eruan-ai2 | AI codes with C++ 14 fix and `Misunderstand m_nexthop`'s fix | Yes, included |
-
+| sonic-mgmt | https://code.alibaba-inc.com/SONiC/sonic-mgmt/tree/eruan-ai/ | AI codes | [sonic-mgmt system level tests](#sonic-mgmt-system-level-tests) |
 ## Couple issues fixed for compiling
 * Language Standard, C++14 vs C++17, See the [Language Standard](#1-language-standard) section
 * Header Include Paths: Export vs. Internal Files, See the [Include Path Rules](#2-header-include-paths-export-vs-internal-files) section
