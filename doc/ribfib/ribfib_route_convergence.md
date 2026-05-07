@@ -33,6 +33,12 @@
       - [Recursion Flowchart](#recursion-flowchart)
   - [Changes for Part 1](#changes-for-part-1)
     - [Changes in  `class RIBNHGEntry`](#changes-in--class-ribnhgentry)
+    - [Method Update: `RIBNHGEntry::getNextHopGroupFields()`](#method-update-ribnhgentrygetnexthopgroupfields)
+      - [Algorithm Summary](#algorithm-summary)
+        - [📦 Entry Types](#-entry-types)
+        - [⚙️ Operating Modes](#️-operating-modes)
+        - [🚦 Marker Behavior](#-marker-behavior)
+        - [📉 Slot Consumption](#-slot-consumption)
     - [`fib_nhg_walk_spec_for_node_quick_fixup()`](#fib_nhg_walk_spec_for_node_quick_fixup)
     - [`fib_nhg_prune_spec_for_node_quick_fixup()`](#fib_nhg_prune_spec_for_node_quick_fixup)
     - [Part 1's call flow](#part-1s-call-flow)
@@ -454,8 +460,33 @@ Caches the last APPDB field string written by this entry. Before calling `writeT
         string m_last_appdb_fields;
 ```
 
-* Method Update: `RIBNHGEntry::getNextHopGroupFields()`
-Before recursing into each depends entry in `m_resolvedGroup`, check `m_resolved_enable_group`: if the depends entry is marked `false` (disabled), skip it. This produces the correct flat resolved paths reflecting the current enable/disable state at every level of the dependency chain.
+### Method Update: `RIBNHGEntry::getNextHopGroupFields()`
+Before going through each depends entry in `m_resolvedGroup`, check `m_resolved_enable_group`: if the depends entry is marked `false` (disabled), skip it. This produces the correct flat resolved paths reflecting the current enable/disable state at every level of the dependency chain.
+
+#### Algorithm Summary
+
+This code builds `m_resolvedGroup` by iterating through `nh_grp_full_list` using a **marker-gated slot machine pattern**:
+
+##### 📦 Entry Types
+The list contains two types of entries:
+1. **Markers** (`num_direct > 0`): Control gates that grant insertion slots for subsequent entries.
+2. **Regular entries** (`num_direct == 0`): Actual nexthops that may be inserted into `m_resolvedGroup`.
+
+##### ⚙️ Operating Modes
+| Mode | Entry Condition | Insertion Rule |
+| :--- | :--- | :--- |
+| **Default** | No active marker | Insert only if the entry's ID is explicitly enabled in `m_resolved_enable_group` |
+| **Pending** | After an enabled marker | Insert unconditionally while slots remain (no per-entry enable check) |
+
+##### 🚦 Marker Behavior
+- An **enabled marker** activates pending mode and grants `num_direct` slots.
+- A **disabled marker** grants nothing — subsequent entries fall back to default mode or remain in the current pending mode.
+- **Nested markers** (a marker encountered while already in pending mode): adds `num_direct - 1` slots (the marker itself consumes one slot from the parent's allowance).
+
+##### 📉 Slot Consumption
+- Every regular entry encountered in pending mode consumes one slot, **regardless of whether it was inserted** (disabled entries still burn a slot).
+- When slots reach `0`, the mode automatically reverts to **Default**.
+
 
 ### `fib_nhg_walk_spec_for_node_quick_fixup()`
 This function provides the Part 1-specific implementation of the `fib_nhg_walk_spec_func` callback. The caller registers this function before initiating the backwalk, ensuring consistent logic across all nodes in a single traversal.
