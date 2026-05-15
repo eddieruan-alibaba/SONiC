@@ -163,7 +163,8 @@ static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
 					 int force, struct route_node *nrn,
 					 struct rnh *rnh,
 					 struct route_node *prn,
-					 struct route_entry *re)
+					 struct route_entry *re,
+					 bool route_entry_queued)
 ```
 
 When a state change is detected (state_changed == true), Zebra must propagate the following context to dplane to enable informed FIB NHT updates.
@@ -182,19 +183,26 @@ Note: Currently, all related context is sent to dplane. Processing follows a pha
 * Phase 1: Trigger backwalk when an RNH prefix becomes unresolvable. Walk from the previous resolved NHG ID to prune failed paths from dependent NHGs.
 * Future: Extend handling to cover other caases.
 
-In zebra_rnh_resolve_nexthop_entry(), route resolution may temporarily fail if a route entry is still queued and awaiting processing. To prevent unnecessary traffic disruption, we should suppress RNH events to the FPM during this window. This is achieved by modifying the return semantics of `zebra_rnh_resolve_nexthop_entry()`:
+In `zebra_rnh_resolve_nexthop_entry()`, route resolution may temporarily fail if a route entry is still queued and awaiting processing. To prevent unnecessary traffic disruption, we suppress the NHT dplane event (but NOT the entire evaluation) during this window.
 
-* **Returns `true`**: Resolution succeeded (at least one non-queued route found). NHT event should be sent.
-* **Returns `false`**: Resolution failed because ALL candidate routes are `ROUTE_ENTRY_QUEUED`. NHT event is suppressed.
+**Approach**: Add a new output parameter `bool *route_entry_queued` to `zebra_rnh_resolve_nexthop_entry()`. The function tracks two internal flags (`saw_selected`, `saw_queued`) and sets `*route_entry_queued = true` when all selected candidate routes were skipped due to `ROUTE_ENTRY_QUEUED`. Callers that don't need this information pass `NULL`.
 
-The caller (in the `--asic-offload=notify_on_offload` code path) checks this return value:
+**Important**: The suppression only gates the `dplane_nht_event_update()` call inside `zebra_rnh_eval_nexthop_entry()`. The rest of the evaluation (state change detection, client notifications, pseudowire processing) proceeds normally. This avoids blocking protocol client notifications when routes are queued.
+
 ```c
-if (!zebra_rnh_resolve_nexthop_entry(rnh, &resolved_re, ...)) {
-    // All candidate routes are queued — suppress NHT event.
-    // Normal re-evaluation will fire when the route is offloaded.
-    return;
+// In zebra_rnh_evaluate_entry():
+bool route_entry_queued = false;
+re = zebra_rnh_resolve_nexthop_entry(zvrf, afi, nrn, rnh, &prn,
+                                     &route_entry_queued);
+// ... no early return for route_entry_queued ...
+zebra_rnh_eval_nexthop_entry(zvrf, afi, force, nrn, rnh, prn, re,
+                             route_entry_queued);
+
+// In zebra_rnh_eval_nexthop_entry(), gate only the dplane event:
+if (state_changed && !route_entry_queued) {
+    dplane_nht_event_update(...);
 }
-// ... proceed to generate NHT event via dplane_nht_event_update() ...
+// ... client notifications and pseudowire processing proceed regardless ...
 ```
 
 **Recovery**: When the queued route finishes processing and gets offloaded (Step 3 in the code path below), FRR's normal NHT re-evaluation cycle triggers automatically. At that point, `zebra_rnh_resolve_nexthop_entry()` succeeds (the route is no longer queued) and the correct NHT event is sent to FPM. No explicit re-trigger mechanism is needed.
@@ -390,12 +398,104 @@ struct dplane_rnh_info {
 ```
 
 ### Event Generation Workflow
-* Implement a helper function to populate dplane_rnh_info from RNH state.
-* Enqueue the populated zebra_dplane_ctx into the dplane work queue.
-  * For now, we always set dplane_ctx_set_skip_kernel(ctx) for skipping DPLANE_OP_NHT_EVENT_UPDATE in kernel. 
-* Invoke this helper from zebra_rnh_eval_nexthop_entry() immediately after detecting a state transition.
 
-We need to create a new function to populate dplane_rnh_info, then put the ctx into the queue. This new function would be triggered from zebra_rnh_eval_nexthop_entry() once we find there is some changes in this rnh. 
+#### `copy_state()` Fix: Preserve NHE ID
+
+The existing `copy_state()` call uses `zebra_nhe_copy(re->nhe, 0)`, which zeroes the NHE ID in the cached state. This breaks `prev_nhg_id` caching — when `zebra_rnh_eval_nexthop_entry()` reads `rnh->state->nhe->id` before `copy_state()`, it gets 0 instead of the actual previous NHG ID.
+
+**Fix**: Change to `zebra_nhe_copy(re->nhe, re->nhe->id)` to preserve the NHE ID in the copy.
+
+#### NHT Event Generation in `zebra_rnh_eval_nexthop_entry()`
+
+Before any state mutation (before `copy_state()` is called), cache the previous state as primitive values:
+```c
+uint32_t prev_nhg_id = (rnh->state && rnh->state->nhe)
+                        ? rnh->state->nhe->id : 0;
+struct prefix prev_resolved;
+prefix_copy(&prev_resolved, &rnh->resolved_route);
+```
+
+After state change detection (`state_changed || force`), generate the NHT dplane event — gated by both `state_changed` and `!route_entry_queued`:
+```c
+if (state_changed && !route_entry_queued) {
+    struct prefix curr_resolved;
+    uint32_t curr_nhg_id;
+    enum zebra_dplane_result dplane_res;
+
+    prefix_copy(&curr_resolved, &rnh->resolved_route);
+    curr_nhg_id = (rnh->state && rnh->state->nhe)
+                  ? rnh->state->nhe->id : 0;
+
+    if (IS_ZEBRA_DEBUG_NHT)
+        zlog_debug("NHT event: rnh=%pFX prev_nhg=%u curr_nhg=%u",
+                   &nrn->p, prev_nhg_id, curr_nhg_id);
+
+    dplane_res = dplane_nht_event_update(
+        &nrn->p, &prev_resolved, prev_nhg_id,
+        &curr_resolved, curr_nhg_id);
+    if (dplane_res != ZEBRA_DPLANE_REQUEST_QUEUED)
+        zlog_warn("NHT event enqueue failed for rnh=%pFX: result=%d",
+                  &nrn->p, dplane_res);
+}
+```
+
+Client notifications and pseudowire processing follow unconditionally (same as before).
+
+#### `dplane_nht_event_update()` Function
+
+| Aspect | Specification |
+|:---|:---|
+| Declared in | `zebra/zebra_dplane.h` |
+| Implemented in | `zebra/zebra_dplane.c` |
+| Signature | `enum zebra_dplane_result dplane_nht_event_update(const struct prefix *rnh_prefix, const struct prefix *prev_resolved_prefix, uint32_t prev_nhg_id, const struct prefix *curr_resolved_prefix, uint32_t curr_nhg_id)` |
+| Return | `ZEBRA_DPLANE_REQUEST_QUEUED` on success, `ZEBRA_DPLANE_REQUEST_FAILURE` on error |
+| Kernel skip | Always sets `dplane_ctx_set_skip_kernel(ctx)` — NHT events only target FPM consumers |
+| NULL check | Returns failure immediately if `rnh_prefix` is NULL |
+| Debug logging | Logs rnh prefix and NHG IDs at `IS_ZEBRA_DEBUG_DPLANE_DETAIL` level |
+| Cleanup | Frees ctx on enqueue failure |
+
+Note: The function takes `const struct prefix *` parameters (not `struct rnh *`) for clean dplane separation — the dplane layer should not know about RNH internals.
+
+#### Accessor Functions
+
+Declared in `zebra/zebra_dplane.h`, implemented in `zebra/zebra_dplane.c`:
+
+| Function | Return Type |
+|:---|:---|
+| `dplane_ctx_get_nht_rnh_prefix(ctx)` | `const struct prefix *` |
+| `dplane_ctx_get_nht_prev_resolved_prefix(ctx)` | `const struct prefix *` |
+| `dplane_ctx_get_nht_prev_resolved_nhg_id(ctx)` | `uint32_t` |
+| `dplane_ctx_get_nht_curr_resolved_prefix(ctx)` | `const struct prefix *` |
+| `dplane_ctx_get_nht_curr_resolved_nhg_id(ctx)` | `uint32_t` |
+
+Each accessor calls `DPLANE_CTX_VALID(ctx)` and reads from `ctx->u.rnh_info`.
+
+#### Boilerplate Switch Cases
+
+`DPLANE_OP_NHT_EVENT_UPDATE` must be added to every exhaustive switch on `dplane_op_e` across these files:
+
+| File | Switch Location | Action |
+|:---|:---|:---|
+| `zebra/zebra_dplane.c` | `dplane_op2str()` | Return `"NHT_EVENT_UPDATE"` |
+| `zebra/zebra_dplane.c` | `dplane_ctx_free_internal()` | `break` (no resources to free) |
+| `zebra/zebra_dplane.c` | `kernel_dplane_log_detail()` | Log rnh prefix via `dplane_ctx_get_nht_rnh_prefix()` |
+| `zebra/zebra_dplane.c` | `kernel_dplane_handle_result()` | Increment `dg_other_errors` on failure |
+| `zebra/zebra_rib.c` | `rib_process_dplane_results()` | `break` (no-op, handled by FPM provider) |
+| `zebra/dplane_fpm_nl.c` | `fpm_nl_enqueue()` | `break` (handled by sonic-buildimage's FPM provider, not upstream) |
+| `zebra/kernel_netlink.c` | `nl_put_msg()` | Return `FRR_NETLINK_ERROR` (not a kernel op) |
+| `zebra/kernel_socket.c` | `kernel_update_multi()` | Log error + set failure (not a kernel op) |
+| `zebra/zebra_script.c` | Lua dplane ctx push | `break` (no Lua binding) |
+
+#### `zebra_rnh_clear_nhc_flag()` Update
+
+This function also calls `zebra_rnh_resolve_nexthop_entry()`. Pass `NULL` for the `route_entry_queued` parameter since it doesn't need suppression information:
+```c
+re = zebra_rnh_resolve_nexthop_entry(zvrf, afi, nrn, rnh, &prn, NULL);
+```
+
+#### Include Dependency
+
+Add `#include "zebra/zebra_dplane.h"` to `zebra/zebra_rnh.c` for the `dplane_nht_event_update()` declaration and `enum zebra_dplane_result` type.
 
 # 4. FPM Message Serialization (SONiC Integration)
 In fpm_nl_enqueue() https://github.com/sonic-net/sonic-buildimage/blob/master/src/sonic-frr/dplane_fpm_sonic/dplane_fpm_sonic.c#L2451, add a case handler for the new operation:
