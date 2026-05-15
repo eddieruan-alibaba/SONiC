@@ -498,15 +498,99 @@ re = zebra_rnh_resolve_nexthop_entry(zvrf, afi, nrn, rnh, &prn, NULL);
 Add `#include "zebra/zebra_dplane.h"` to `zebra/zebra_rnh.c` for the `dplane_nht_event_update()` declaration and `enum zebra_dplane_result` type.
 
 # 4. FPM Message Serialization (SONiC Integration)
-In fpm_nl_enqueue() https://github.com/sonic-net/sonic-buildimage/blob/master/src/sonic-frr/dplane_fpm_sonic/dplane_fpm_sonic.c#L2451, add a case handler for the new operation:
+
+**File**: `src/sonic-frr/dplane_fpm_sonic/dplane_fpm_sonic.c`
+
+## Include Dependency
+
+Add at the top with existing sonic-fib includes:
+```c
+#include <nexthopgroup/c-api/nhtevent_capi.h>
+#include <nexthopgroup/c_nhtevent.h>
 ```
+
+Both headers are needed: `c_nhtevent.h` provides the `struct C_NhtEvent` definition, `nhtevent_capi.h` declares `nhtevent_json_from_c_nht()`.
+
+## Custom Message Type
+
+Add to the `enum custom_nlmsg_types` block:
+```c
+RTM_NEWNHTEVENT = 6000,
+```
+
+## Encoder Function: `netlink_nhtevent_msg_encode()`
+
+A standalone encoder function following the same pattern as `netlink_nhg_fib_msg_encode()`.
+
+| Aspect | Specification |
+|:---|:---|
+| Signature | `static ssize_t netlink_nhtevent_msg_encode(const struct zebra_dplane_ctx *ctx, void *buf, size_t buflen)` |
+| Return value | `-1` on failure, `0` when msg doesn't fit in buffer, otherwise number of bytes written |
+| Netlink header | Uses `struct rtmsg` (not `nhmsg`); type = `RTM_NEWNHTEVENT`; flags = `NLM_F_CREATE \| NLM_F_REQUEST` |
+| Family | `req->rtm.rtm_family = rnh_pfx ? rnh_pfx->family : AF_UNSPEC` |
+| Buffer check | Returns `0` if `buflen < sizeof(*req)` |
+| JSON attribute | Encoded as `FPM_NHA_JSON_STR` via `nl_attr_put()` with return value check |
+
+### Field Extraction and NULL Handling
+
+| Field | Accessor | NULL/Zero-family Fallback |
+|:---|:---|:---|
+| `rnh_prefix` | `dplane_ctx_get_rnh_prefix(ctx)` | `::/0` |
+| `prev_resolved_prefix` | `dplane_ctx_get_rnh_prev_resolved_prefix(ctx)` | `::/0` |
+| `prev_resolved_nhg_id` | `dplane_ctx_get_rnh_prev_resolved_nhg_id(ctx)` | (uint32_t, always valid) |
+| `curr_resolved_prefix` | `dplane_ctx_get_rnh_curr_resolved_prefix(ctx)` | `::/0` |
+| `curr_resolved_nhg_id` | `dplane_ctx_get_rnh_curr_resolved_nhg_id(ctx)` | (uint32_t, always valid) |
+
+For each prefix field: if the pointer is non-NULL and `family != 0`, convert via `prefix2str()` into a `char[64]` buffer. Otherwise, use the fallback string `::/0`.
+
+### JSON Serialization
+
+Populate a `struct C_NhtEvent` from the extracted fields, then pass its pointer to the C API:
+```c
+struct C_NhtEvent c_nht = {};
+/* rnh_prefix, prev_resolved_prefix, curr_resolved_prefix are char[64] locals
+   populated by prefix2str() or fallback above */
+strlcpy(c_nht.rnh_prefix, rnh_prefix, sizeof(c_nht.rnh_prefix));
+strlcpy(c_nht.prev_resolved_prefix, prev_resolved_prefix, sizeof(c_nht.prev_resolved_prefix));
+c_nht.prev_resolved_nhg_id = prev_resolved_nhg_id;
+strlcpy(c_nht.curr_resolved_prefix, curr_resolved_prefix, sizeof(c_nht.curr_resolved_prefix));
+c_nht.curr_resolved_nhg_id = curr_resolved_nhg_id;
+
+json_str = nhtevent_json_from_c_nht(&c_nht);
+```
+
+This matches the sonic-fib C API signature: `char* nhtevent_json_from_c_nht(const struct C_NhtEvent* c_nht)`.
+
+### Error Handling
+
+| Condition | Action |
+|:---|:---|
+| `nhtevent_json_from_c_nht()` returns NULL | `zlog_err("%s: nhtevent_json_from_c_nht failed for rnh=%s", __func__, rnh_prefix)` → return -1 |
+| `nl_attr_put()` returns false (buffer overflow) | `zlog_err` → `free(json_str)` → return -1 |
+
+### Debug Logging
+
+On successful encode: `zlog_debug("%s: encoded NHT event rnh=%s ret=%zd", __func__, rnh_prefix, ret)`
+
+### Memory
+
+`free(json_str)` after netlink message is fully constructed (before return).
+
+## Switch Case in `fpm_nl_enqueue()`
+
+```c
 case DPLANE_OP_NHT_EVENT_UPDATE:
-    // Extract rnh_info from ctx
-    // Serialize to FPM message per sonic-fib schema
-    // Enqueue to FPM socket
+    rv = netlink_nhtevent_msg_encode(ctx, nl_buf, sizeof(nl_buf));
+    if (rv <= 0) {
+        zlog_err("%s: netlink_nhtevent_msg_encode failed", __func__);
+        dplane_ctx_set_status(ctx, ZEBRA_DPLANE_REQUEST_FAILURE);
+        return 0;
+    }
+    nl_buf_len = (size_t)rv;
     break;
 ```
-The FPM message format for NHT_EVENT_UPDATE must be defined in the sonic-fib interface definition, ensuring alignment between FRR's dplane output and fpmsyncd's ingestion logic.
+
+This follows the same error-handling pattern as other encoder call sites: on failure, set status and return 0 (message not enqueued).
 
 # 5. SONiC-fib Enhancements for NHT events
 A new JSON schema `NhtEvent.json` is added to the [sonic-fib](https://github.com/eddieruan-alibaba/sonic-fib) repository, following the same template-driven generation pattern as `NextHopGroupFull.json`.
