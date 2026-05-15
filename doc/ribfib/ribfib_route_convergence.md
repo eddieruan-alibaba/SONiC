@@ -423,7 +423,62 @@ The schema captures the full `dplane_rnh_info` payload so that future phases nee
 | `curr_resolved_prefix` | string (addr/len) | Current resolving route prefix | `0.0.0.0/0` or `::/0` |
 | `curr_resolved_nhg_id` | integer | Current resolving NHG identifier | 0 |
 
-Prefix strings use `addr/len` notation. All 5 fields are required.
+Prefix strings use `addr/len` notation. All 5 fields are required. The schema enforces `"required"` and `"additionalProperties": false` to catch malformed JSON at parse time.
+
+**Schema file** (`schema/NhtEvent.json`):
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "NhtEvent.json",
+  "title": "NhtEvent",
+  "description": "NHT (Nexthop Tracking) event from FRR zebra to fpmsyncd",
+  "type": "object",
+  "properties": {
+    "rnh_prefix": {
+      "type": "string",
+      "position": 1,
+      "default_value": "\"\"",
+      "description": "Tracked RNH prefix in addr/len format (e.g. 2064:100::1d/128)"
+    },
+    "prev_resolved_prefix": {
+      "type": "string",
+      "position": 1,
+      "default_value": "\"\"",
+      "description": "Previous resolving route prefix in addr/len format. 0.0.0.0/0 or ::/0 when unresolved"
+    },
+    "prev_resolved_nhg_id": {
+      "type": "integer",
+      "position": 1,
+      "minimum": 0,
+      "default_value": "0",
+      "description": "Previous resolving NHG identifier. 0 when unresolved"
+    },
+    "curr_resolved_prefix": {
+      "type": "string",
+      "position": 1,
+      "default_value": "\"\"",
+      "description": "Current resolving route prefix in addr/len format. 0.0.0.0/0 or ::/0 when unresolved"
+    },
+    "curr_resolved_nhg_id": {
+      "type": "integer",
+      "position": 1,
+      "minimum": 0,
+      "default_value": "0",
+      "description": "Current resolving NHG identifier. 0 when unresolved (Phase 1 trigger)"
+    }
+  },
+  "required": [
+    "rnh_prefix",
+    "prev_resolved_prefix",
+    "prev_resolved_nhg_id",
+    "curr_resolved_prefix",
+    "curr_resolved_nhg_id"
+  ],
+  "additionalProperties": false
+}
+```
+
+Note: The `"default_value"` field uses C++ literal notation (`"\"\""` for empty string, `"0"` for integer) — these are passed directly into generated code as initializers.
 
 ### Example: nexthop becomes unresolved (Phase 1 trigger)
 
@@ -445,20 +500,104 @@ The Jinja2 template pipeline generates four files from `schema/NhtEvent.json`:
 
 | Generated File | Purpose |
 |:---|:---|
-| `src/nhtevent.h` / `src/nhtevent.cpp` | C++ `fib::NhtEvent` struct with constructors, copy/move, equality operators |
-| `src/nhtevent_json.h` | `to_json_string()`, `nhtevent_from_json()`, `nhtevent_from_json_string()` via nlohmann/json |
-| `src/c_nhtevent.h` | C struct `C_NhtEvent` with fixed-size char arrays (64 bytes per prefix) for FRR |
+| `src/nhtevent.h` / `src/nhtevent.cpp` | C++ `fib::NhtEvent` POD struct with default initializers (no custom constructors, copy ops, or equality operators needed for simple scalar/string fields) |
+| `src/nhtevent_json.h` | ADL-based `to_json()`/`from_json()` for nlohmann/json integration, plus `nhtevent_to_json_string()` and `nhtevent_from_json_string()` convenience helpers |
+| `src/c_nhtevent.h` | C struct `C_NhtEvent` with `NHT_PREFIX_MAXLEN` (64) fixed-size char arrays for FRR, wrapped in `extern "C"` guards |
+
+### Design Decisions
+
+* **POD struct over class**: `NhtEvent` has only 5 trivial fields (3 strings, 2 integers). Default copy/move/equality from the compiler are sufficient. This reduces template complexity and generated code size.
+* **ADL `to_json`/`from_json`**: The idiomatic nlohmann/json pattern. Enables `nlohmann::ordered_json j = evt;` and `j.get<NhtEvent>()` directly.
+* **`nhtevent_to_json_string()`**: Named helper (not generic `to_json_string()`) to avoid collisions with other types in the `fib` namespace.
+* **C API takes `const struct C_NhtEvent*`**: Single-pointer parameter is more extensible than individual arguments — adding fields requires no signature change.
 
 ## C API for FRR Integration
 
-New files `src/c-api/nhtevent_capi.h` and `src/c-api/nhtevent_capi.cpp` provide:
+**Files**: `src/c-api/nhtevent_capi.h` and `src/c-api/nhtevent_capi.cpp`
 
-```c
-/* Encode: C_NhtEvent -> JSON string (caller must free()) */
-char* nhtevent_json_from_c_nht(const struct C_NhtEvent* c_nht);
-```
+**Function**: `char* nhtevent_json_from_c_nht(const struct C_NhtEvent* c_nht)`
+
+| Aspect | Specification |
+|:---|:---|
+| Linkage | `extern "C"` — callable from C (FRR) |
+| Input | `const struct C_NhtEvent*` (generated C struct from `c_nhtevent.h.j2`) |
+| Output | `malloc`'d JSON string; caller must `free()`. Returns `NULL` on failure. |
+| Serialization flow | 1. Field-by-field copy from `C_NhtEvent` → `fib::NhtEvent` (POD struct) <br> 2. Call `fib::nhtevent_to_json_string(evt)` to produce JSON <br> 3. `malloc` + `memcpy` the result string for C ownership |
+| Error handling | NULL pointer check → log `FIB_LOG(ERROR)` + return NULL <br> Serialization exception (catch-all) → log `FIB_LOG(ERROR)` + return NULL <br> malloc failure → log `FIB_LOG(ERROR)` + return NULL |
+| Debug logging | On success, log JSON string length and content at `DEBUG` level via `FIB_LOG` |
+| Header guard | Standard `#ifndef NHTEVENT_CAPI_H` with `extern "C"` block; forward-declares `struct C_NhtEvent` |
 
 FRR's `fpm_nl_enqueue()` calls `nhtevent_json_from_c_nht()` in the `DPLANE_OP_NHT_EVENT_UPDATE` case to serialize the event before sending over the FPM socket. fpmsyncd deserializes via `nhtevent_from_json_string()`.
+
+## Generated Code Templates
+
+Four Jinja2 templates in `templates/` are rendered by `scripts/render_schema.py` to produce generated code from the JSON schema. Each template follows the existing `nexthopgroupfull` conventions.
+
+### Template: `nhtevent.h.j2` (mode: `header`)
+
+Generates the C++ POD struct header.
+
+| Aspect | Description |
+|:---|:---|
+| Output | `#pragma once` header in `namespace fib` |
+| Structure | A single `struct {root_struct_name}` with one member per schema property |
+| Field iteration | Iterates `structs[root_struct_name].fields` (consistent with `nexthopgroupfull.h.j2`) |
+| Default values | Each field uses `= {field.default_value}` inline initializer from schema's `default_value` (C++ literal notation) |
+| Includes | `<string>`, `<cstdint>` |
+
+### Template: `nhtevent.cpp.j2` (mode: `source`)
+
+Generates an empty implementation file (POD structs need no custom methods).
+
+| Aspect | Description |
+|:---|:---|
+| Output | Includes the header; contains only a namespace placeholder comment |
+| Rationale | POD struct — no constructors, destructors, or operators needed |
+| Context | Only `root_struct_name` needed |
+
+### Template: `nhtevent_json.h.j2` (mode: `json_bindings`)
+
+Generates nlohmann/json ADL bindings and string helpers.
+
+| Aspect | Description |
+|:---|:---|
+| Pattern | nlohmann ADL: free functions `to_json(ordered_json&, const T&)` and `from_json(const ordered_json&, T&)` |
+| `to_json` | Constructs `ordered_json` initializer list from all `root_struct.fields` (preserves field order) |
+| `from_json` | Calls `j.at("{field.name}").get_to(obj.{field.name})` for each field (strict — throws on missing keys) |
+| String helpers | `nhtevent_to_json_string(const T&)` → `ordered_json(obj).dump()` <br> `nhtevent_from_json_string(const string&)` → `parse` + `get<T>()` |
+| All functions | `inline` in header (header-only library pattern) |
+| Includes | The struct header + `<nlohmann/json.hpp>` + `<string>` |
+
+### Template: `c_nhtevent.h.j2` (mode: `c_header`)
+
+Generates a C-compatible struct for FRR integration.
+
+| Aspect | Description |
+|:---|:---|
+| Output | `#ifndef` guarded C header with `extern "C"` block |
+| Constant | `#define NHT_PREFIX_MAXLEN 64` for fixed-size char arrays |
+| Field mapping | `char*` schema fields → `char name[NHT_PREFIX_MAXLEN]`; numeric fields → direct C type |
+| Field iteration | Uses `root_struct.fields` directly |
+| Includes | `<stdint.h>`, `<stdbool.h>` |
+
+### `render_schema.py` Template Selection
+
+| Aspect | Description |
+|:---|:---|
+| Template naming | Derived from schema `title.lower()` — e.g., `"NhtEvent"` → base `"nhtevent"` |
+| Mode → filename | `header` → `{base}.h.j2`, `source` → `{base}.cpp.j2`, `json_bindings` → `{base}_json.h.j2`, `c_header` → `c_{base}.h.j2` |
+| No explicit map | Convention-based discovery; adding a new schema only requires matching template filenames |
+
+Template context by mode:
+
+| Mode | Context Variables |
+|:---|:---|
+| `header` | `enums`, `structs`, `special_structs`, `root_struct_name` |
+| `source` | `root_struct_name` |
+| `json_bindings` | `enums`, `root_struct_name`, `root_struct`, `special_structs`, `all_structs` |
+| `c_header` | `c_enums`, `structs`, `special_structs`, `root_struct`, `root_struct_name` |
+
+Note: The `header` template uses `structs[root_struct_name].fields` (consistent with `nexthopgroupfull.h.j2`), while `json_bindings` and `c_header` use `root_struct.fields` directly.
 
 ## Data Flow
 
