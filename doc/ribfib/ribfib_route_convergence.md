@@ -182,7 +182,23 @@ Note: Currently, all related context is sent to dplane. Processing follows a pha
 * Phase 1: Trigger backwalk when an RNH prefix becomes unresolvable. Walk from the previous resolved NHG ID to prune failed paths from dependent NHGs.
 * Future: Extend handling to cover other caases.
 
-n zebra_rnh_resolve_nexthop_entry(), route resolution may temporarily fail if a route entry is still queued and awaiting processing. To prevent unnecessary traffic disruption, we should suppress RNH events to the FPM during this window. This is achieved by propagating a failure indicator to the caller, which then skips forwarding the NHT event to FPM.
+In zebra_rnh_resolve_nexthop_entry(), route resolution may temporarily fail if a route entry is still queued and awaiting processing. To prevent unnecessary traffic disruption, we should suppress RNH events to the FPM during this window. This is achieved by modifying the return semantics of `zebra_rnh_resolve_nexthop_entry()`:
+
+* **Returns `true`**: Resolution succeeded (at least one non-queued route found). NHT event should be sent.
+* **Returns `false`**: Resolution failed because ALL candidate routes are `ROUTE_ENTRY_QUEUED`. NHT event is suppressed.
+
+The caller (in the `--asic-offload=notify_on_offload` code path) checks this return value:
+```c
+if (!zebra_rnh_resolve_nexthop_entry(rnh, &resolved_re, ...)) {
+    // All candidate routes are queued — suppress NHT event.
+    // Normal re-evaluation will fire when the route is offloaded.
+    return;
+}
+// ... proceed to generate NHT event via dplane_nht_event_update() ...
+```
+
+**Recovery**: When the queued route finishes processing and gets offloaded (Step 3 in the code path below), FRR's normal NHT re-evaluation cycle triggers automatically. At that point, `zebra_rnh_resolve_nexthop_entry()` succeeds (the route is no longer queued) and the correct NHT event is sent to FPM. No explicit re-trigger mechanism is needed.
+
 The queued state is handled in the following place in zebra_rnh_resolve_nexthop_entry().
 
 ```
@@ -484,9 +500,25 @@ This function serves as the primary entry point invoked when `fpmsyncd` receives
 The function performs two primary operations:
 
 ### Part 1: Global Table Context Backwalk
-Uses the incoming resolved NHG ID to trigger a backwalk that updates all relevant NHGs in the global table context.
+Locates the starting RIBNHGEntries for the global table context and triggers a backwalk that updates all relevant NHGs.
 
-It initializes a `fib_nhg_walking_ctx` structure with the following configuration:
+**Entry point resolution (two-step lookup)**:
+1. **Try `resolved_nhg_id` first**: Call `getEntry(resolved_nhg_id)`. If found, use it as the sole starting entry.
+2. **Fallback to `m_nexthop_to_global_RIBNHG`**: If `getEntry(resolved_nhg_id)` returns nullptr (the `resolved_nhg_id` points to a connected-route NHG not in our table — see "One variation for part 1" below), fall back to `m_nexthop_to_global_RIBNHG.getGlobalEntries(nexthop_addr)` which returns the set of global-table RIBNHGEntries whose gateway matches the nexthop address.
+
+```
+    // Phase 1: Global Table Context
+    global_entries = {}
+    entry_by_id = getEntry(resolved_nhg_id)
+    if entry_by_id != nullptr:
+        global_entries = {entry_by_id}
+    else:
+        // resolved_nhg_id points to connected-route NHG (not in our table)
+        // Fallback: use nexthop address to find leaf RIBNHGEntries
+        global_entries = m_nexthop_to_global_RIBNHG.getGlobalEntries(nexthop_addr)
+```
+
+**For each global entry**, it initializes a `fib_nhg_walking_ctx` structure with the following configuration:
 * **Walk context**: It is a structure which could store various information during the walk. For example 
   * A `visited_node_set`. It starts with an empty set. The visited node set would be added later one by one. Each entry tracks a node ID and a boolean flag indicating whether the node was modified during traversal. 
     * *Note: Even if a node is already present in the visited set, the algorithm may still initiate a forward walk to its dependents to propagate any pending updates.*
@@ -494,8 +526,6 @@ It initializes a `fib_nhg_walking_ctx` structure with the following configuratio
 * **Walk Specification**: Set to `fib_nhg_walk_spec_for_node_quick_fixup` in part 1, which defines the operations to perform on each visited node.
 * **Prune Specification**: Set to `fib_nhg_prune_spec_for_node_quick_fixup` in part 1, which determines whether traversal should terminate at the current node.
 * **Nexthop Address**: The address identifying the impacted routing resource.
-
-Finally, the function initiates the traversal by calling `fib_nhg_back_walk()`, using the resolved NHG ID as the root node.
 
 **Caller-level bypass**: Before calling `fib_nhg_back_walk()` on the dependents, the trigger function first evaluates `walk_spec` on the starting node itself. This is the "caller-level bypass" pattern -- the starting node is always evaluated but never pruned. With route-level NHG semantics, the starting node's gateway always matches the withdrawn nexthop for remote failures, so walk_spec returns `true` and the node gets its `m_resolved_enable_group` updated. The trigger function then iterates the starting node's dependents and calls `fib_nhg_back_walk()` on each. This pattern ensures the starting node is processed even when it would otherwise be pruned by prune_spec.
 
@@ -734,41 +764,56 @@ sequenceDiagram
     Syncd->>Trigger: call(nexthop_addr, resolved_nhg_id)
 
     Note over Trigger: Part 1: Global Table Context
-    Trigger->>Trigger: Initialize fib_nhg_walking_ctx:<br/>- visited_node_set = {}<br/>- modified_node_set = {}<br/>- walk_spec = quick_fixup<br/>- prune_spec = quick_fixup<br/>- nexthop_address
+    Trigger->>Table: getEntry(resolved_nhg_id)
+    Table-->>Trigger: RIBNHGEntry* (or null)
 
-    Trigger->>Walk: call(resolved_nhg_id, ctx)
+    alt resolved_nhg_id lookup fails (connected-route NHG not in table)
+        Trigger->>Table: getGlobalEntries(nexthop_addr)
+        Table-->>Trigger: set<RIBNHGEntry*> (0..N)
+    end
 
-    loop For each node in DFS traversal
-        Walk->>Table: getEntry(id)
-        Table-->>Walk: RIBNHGEntry*
+    loop For each global entry (caller-level bypass)
+        Trigger->>Trigger: Initialize fib_nhg_walking_ctx:<br/>- visited_node_set = {}<br/>- modified_node_set = {}<br/>- walk_spec = quick_fixup<br/>- prune_spec = quick_fixup<br/>- nexthop_address
 
-        Walk->>Walk: Add id to visited_node_set
+        Trigger->>WSpec: walk_spec(entry, ctx) [evaluate starting node]
+        WSpec-->>Trigger: true/false
 
-        Walk->>WSpec: call(entry, ctx)
-        Note over WSpec: See Section Walk Spec Decision Flowchart
-        WSpec->>Entry: get depends list
-        WSpec->>Entry: evaluate m_resolved_enable_group<br/>(Visit-for-State)
-        WSpec->>WSpec: Check relevance:<br/>(a) gateway match<br/>(b) depends in modified_node_set
+        loop For each dependent_id of starting entry
+            Trigger->>Walk: fib_nhg_back_walk(dependent_id, ctx)
 
-        alt Relevant (fixup needed)
-            WSpec->>Entry: update m_resolved_enable_group
-            WSpec->>Entry: getNextHopGroupFields()<br/>(recursive resolution)
-            Entry->>APPDB: writeToDB() [if not single-path disable]
-            WSpec->>WSpec: Add id to modified_node_set
-            WSpec-->>Walk: return true
-        else Not relevant (visit-for-state only)
-            WSpec-->>Walk: return false
-        end
+            loop DFS traversal
+                Walk->>Table: getEntry(id)
+                Table-->>Walk: RIBNHGEntry*
 
-        Walk->>PSpec: call(entry, walk_result)
-        Note over PSpec: ECMP + not matched → don't prune<br/>Not modified → prune<br/>Modified → don't prune
-        alt Pruned
-            Walk->>Walk: return (stop this branch)
-        end
+                Walk->>Walk: Add id to visited_node_set
 
-        Walk->>Entry: get dependents list
-        loop For each dependent_id
-            Walk->>Walk: recurse(dependent_id, ctx)
+                Walk->>WSpec: call(entry, ctx)
+                Note over WSpec: See Section Walk Spec Decision Flowchart
+                WSpec->>Entry: get depends list
+                WSpec->>Entry: evaluate m_resolved_enable_group<br/>(Visit-for-State)
+                WSpec->>WSpec: Check relevance:<br/>(a) gateway match<br/>(b) depends in modified_node_set
+
+                alt Relevant (fixup needed)
+                    WSpec->>Entry: update m_resolved_enable_group
+                    WSpec->>Entry: getNextHopGroupFields()<br/>(recursive resolution)
+                    Entry->>APPDB: writeToDB() [if not single-path disable]
+                    WSpec->>WSpec: Add id to modified_node_set
+                    WSpec-->>Walk: return true
+                else Not relevant (visit-for-state only)
+                    WSpec-->>Walk: return false
+                end
+
+                Walk->>PSpec: call(entry, walk_result)
+                Note over PSpec: ECMP + not matched → don't prune<br/>Not modified → prune<br/>Modified → don't prune
+                alt Pruned
+                    Walk->>Walk: return (stop this branch)
+                end
+
+                Walk->>Entry: get dependents list
+                loop For each dependent_id
+                    Walk->>Walk: recurse(dependent_id, ctx)
+                end
+            end
         end
     end
 ```
@@ -778,48 +823,66 @@ sequenceDiagram
 `RIBNHGEntry` objects used to create SONiC NHG table entries carry VPN context information, whereas NHT-resolved NHGs from Zebra do not. Consequently, a standard backwalk traversal cannot naturally reach these VPN-scoped entries. To bridge this gap, we introduce an explicit lookup mechanism.
 
 ### Modifications to `RIBNHGTable` Class
-* New Field: `m_nexthop_to_RIBNHG_map`
-A new index is added to map a nexthop address string to the set of `RIBNHGEntry*` pointers that reference it:
+* New Field: `m_nexthop_to_global_RIBNHG`
+A new index maps a nexthop address string to the set of `RIBNHGEntry*` pointers in the **global routing table context** (default VRF). This map is the fallback for Part 1 when `resolved_nhg_id` lookup fails (connected nexthop case):
 ```
-    std::map<std::string, std::set<RIBNHGEntry*>> m_nexthop_to_RIBNHG_map;
+    std::map<std::string, std::set<RIBNHGEntry*>> m_nexthop_to_global_RIBNHG;
 ```
-* Supporting APIs
-Three helper methods manage this mapping:
+
+* Renamed Field: `m_nexthop_to_vrf_RIBNHG` (was `m_nexthop_to_RIBNHG_map`)
+The existing VRF/VPN nexthop map is renamed for clarity. It maps a nexthop address string to the set of `RIBNHGEntry*` pointers that reference it in **VRF context** (VPN NHGs):
 ```
-   void addEntry(const std::string& nexthop, RIBNHGEntry* entry) {
-        m_nexthop_to_RIBNHG_map[nexthop].insert(entry);
+    std::map<std::string, std::set<RIBNHGEntry*>> m_nexthop_to_vrf_RIBNHG;
+```
+
+* Supporting APIs (uniform interface for both maps)
+```
+    // Global map APIs (Part 1 fallback)
+    void addGlobalEntry(const std::string& nexthop, RIBNHGEntry* entry) {
+        m_nexthop_to_global_RIBNHG[nexthop].insert(entry);
     }
 
-    bool removeEntry(const std::string& nexthop, RIBNHGEntry* entry) {
-        auto it = m_nexthop_to_RIBNHG_map.find(nexthop);
-        if (it == m_nexthop_to_RIBNHG_map.end()) {
-            return false; // Nexthop key doesn't exist
-        }
-
-        // erase() returns 1 if removed, 0 if not found
-        if (it->second.erase(entry) == 0) {
-            return false; // Entry pointer not in the set
-        }
-
-        // 🧹 Clean up: remove the map entry if the set becomes empty
-        if (it->second.empty()) {
-            m_nexthop_to_RIBNHG_map.erase(it);
-        }
-
+    bool removeGlobalEntry(const std::string& nexthop, RIBNHGEntry* entry) {
+        auto it = m_nexthop_to_global_RIBNHG.find(nexthop);
+        if (it == m_nexthop_to_global_RIBNHG.end()) return false;
+        if (it->second.erase(entry) == 0) return false;
+        if (it->second.empty()) m_nexthop_to_global_RIBNHG.erase(it);
         return true;
     }
 
-    const std::set<RIBNHGEntry*>& getEntries(const std::string& nexthop) const {
-        auto it = m_nexthop_to_RIBNHG_map.find(nexthop);
-        return it != m_nexthop_to_RIBNHG_map.end() ? it->second : emptySet;
+    const std::set<RIBNHGEntry*>& getGlobalEntries(const std::string& nexthop) const {
+        static const std::set<RIBNHGEntry*> emptySet;
+        auto it = m_nexthop_to_global_RIBNHG.find(nexthop);
+        return it != m_nexthop_to_global_RIBNHG.end() ? it->second : emptySet;
+    }
+
+    // VRF map APIs (Part 2, renamed from addEntry/removeEntry/getEntries)
+    void addVrfEntry(const std::string& nexthop, RIBNHGEntry* entry) {
+        m_nexthop_to_vrf_RIBNHG[nexthop].insert(entry);
+    }
+
+    bool removeVrfEntry(const std::string& nexthop, RIBNHGEntry* entry) {
+        auto it = m_nexthop_to_vrf_RIBNHG.find(nexthop);
+        if (it == m_nexthop_to_vrf_RIBNHG.end()) return false;
+        if (it->second.erase(entry) == 0) return false;
+        if (it->second.empty()) m_nexthop_to_vrf_RIBNHG.erase(it);
+        return true;
+    }
+
+    const std::set<RIBNHGEntry*>& getVrfEntries(const std::string& nexthop) const {
+        static const std::set<RIBNHGEntry*> emptySet;
+        auto it = m_nexthop_to_vrf_RIBNHG.find(nexthop);
+        return it != m_nexthop_to_vrf_RIBNHG.end() ? it->second : emptySet;
     }
 ```
 * Integration Points
-* `addEntry()` would be used in `NHGMgr::addNewNHGFull()` when `entry->needCreateSonicObject()` returns true
-* `removeEntry()` would be used in `NHGMgr::delNHGFull()` when `entry->hasSonicGatewayObj()` returns true.
+  * **Global map population**: `addGlobalEntry()` is called in `NHGMgr::addNewNHGFull()` when the entry belongs to the global routing table (NOT VPN context) AND has a non-empty gateway address. This includes leaf NHGs (e.g., NHG 237 with gateway fc06::2) and intermediate NHGs (e.g., NHG 258 with gateway 2064:200::1e). ECMP NHGs without explicit gateway are excluded.
+  * **Global map removal**: `removeGlobalEntry()` is called in `NHGMgr::delNHGFull()` for global-table entries with gateway.
+  * **VRF map population**: `addVrfEntry()` is called in `NHGMgr::addNewNHGFull()` when `entry->needCreateSonicObject()` returns true (unchanged logic, just renamed).
+  * **VRF map removal**: `removeVrfEntry()` is called in `NHGMgr::delNHGFull()` when `entry->hasSonicGatewayObj()` returns true.
 
 ### Backwalk for VPN-Scoped RIBNHGEntries
-For each `RIBNHGEntry*` returned by `getEntries(nexthop)`, we explicitly trigger `fib_nhg_back_walk()` to propagate state changes.
+For each `RIBNHGEntry*` returned by `getVrfEntries(nexthop)`, we explicitly trigger `fib_nhg_back_walk()` to propagate state changes.
 
 ### `fib_nhg_walk_spec_for_node_quick_fixup_sonic_nhg()`
 This variant of the walk spec function is tailored for SONiC NHG updates:
@@ -845,7 +908,7 @@ sequenceDiagram
 
     Note over Trigger,APPDB: Part 2: VPN Context (after Part 1 completes)
 
-    Trigger->>Table: getEntries(nexthop_addr)
+    Trigger->>Table: getVrfEntries(nexthop_addr)
     Table-->>Trigger: set<RIBNHGEntry*>
 
     loop For each VPN-scoped RIBNHGEntry*
@@ -957,7 +1020,7 @@ fc08::2(Connected)
  Client list: bgp(fd 71)
 ```
 
-Therefore, we need to use m_nexthop_to_RIBNHG_map to track all interface's nexthops, a.k.a single path nexthop' RIBNHGEntry, in addtional to nexthops' with VRF context. In Step 1, if NHG id look up fails, we will use nexthop address to check m_nexthop_to_RIBNHG_map for getting a list of RIBNHGEntry without vrf context. In Step 2, it will get a list of RIBNHGEntry with vrf context
+Therefore, we need `m_nexthop_to_global_RIBNHG` to track all interface's nexthops (single-path nexthop RIBNHGEntries in the global table context). In Part 1, if `getEntry(resolved_nhg_id)` fails (because `resolved_nhg_id` points to the connected-route NHG, e.g., NHG 210, which is NOT in our RIBNHGEntry table), we fall back to `m_nexthop_to_global_RIBNHG.getGlobalEntries(nexthop_addr)` to find the set of leaf RIBNHGEntries whose gateway matches the nexthop address (e.g., NHG 232 with gateway fc06::2). In Part 2, `m_nexthop_to_vrf_RIBNHG.getVrfEntries(nexthop_addr)` returns VPN-scoped RIBNHGEntries for the VRF context backwalk.
 
 
 # 7. Examples
@@ -1084,7 +1147,9 @@ Above graph could be presented as the following table
 | 256 | route 1::1 | composite | [257, 258] | -- | {257: true, 258: true} |
 | 262 | route 3::3 | composite | [263, 264] | -- | {263: true, 264: true} |
 ### Local Failure fc06::2 withdrawn
-The NHT event contains "nexthop=fc06::2, resolved_nhg_id=237". 
+The NHT event contains "nexthop=fc06::2, resolved_nhg_id=210" (connected-route NHG for fc06::/120).
+
+**Entry point resolution**: `getEntry(210)` returns nullptr (NHG 210 is a connected-route NHG, not in our RIBNHGEntry table). Fallback: `getGlobalEntries("fc06::2")` returns {NHG 237} (leaf, gateway fc06::2).
 FIB triggers the recursive walk via DFS from 237: `237 → 238 → 257 → 256 → 258 → 256 (revisit) → 263 → 262 → 264 → 262 (revisit)` (234 never reached -- not in backwalk path from 237)
 
 The detailed handling procedure is the following and the initial modified_set is empty.
@@ -1335,7 +1400,9 @@ Above graph could be presented as the following table
 | 269 | route 4::4 | composite | `[266, 270]` | -- | `{266: true, 270: true}` |
 
 ### Local Failure (`fc06::2` withdrawn)
-**NHT:** `nexthop=fc06::2`, `resolved_nhg_id=235`
+**NHT:** `nexthop=fc06::2`, `resolved_nhg_id=210` (connected-route NHG for fc06::/120)
+
+**Entry point resolution**: `getEntry(210)` returns nullptr (NHG 210 is a connected-route NHG, not in our RIBNHGEntry table). Fallback: `getGlobalEntries("fc06::2")` returns {NHG 235} (leaf, gateway fc06::2).
 
 **DFS order from 235:** `235 → 236 → 260 → 263 → 264 → 263 (revisit) → 266 → 269`  
 *(270, 232 never reached -- not in backwalk path from 235)*
@@ -1595,7 +1662,8 @@ graph TD
 
 ### Test local failure
 * Scenario: The route fc06::2/128 is withdrawn.
-* Trigger: An NHT event is generated containing the nexthop address fc06::2 and the corresponding NHG ID 238.
+* Trigger: An NHT event is generated containing the nexthop address fc06::2 and the resolved_nhg_id=210 (connected-route NHG for fc06::/120).
+* Entry point resolution: `getEntry(210)` returns nullptr. Fallback: `getGlobalEntries("fc06::2")` returns {NHG 238} (leaf, gateway fc06::2).
 * Expected Result:
   * Part 1 starting from node 238
     1. **238** (STARTING, leaf `fc06::2`):
@@ -1605,7 +1673,7 @@ graph TD
         - `238` fully disabled → mark: `{234: true, 238: false}`.
         - Flat: `{fc08::2}`. APPDB written. `modified_set += 237`.
   * Part 2 starting from fc06::2
-    _ no match for fc06::2 in m_nexthop_to_RIBNHG_map
+    _ no match for fc06::2 in m_nexthop_to_vrf_RIBNHG
 
 **Call flow trace**:
 
@@ -1616,7 +1684,7 @@ Part 1 (Global Table Context):
 | 1 | back_walk(238) | Leaf. Gateway fc06::2 matches nexthop. Self-ref: {238: false}. Single path -> skip APPDB. | true | not pruned (modified) | yes -> dependents=[237] | -- | {238} |
 | 2 | back_walk(237) | ECMP. Depends [234, 238]. 238 fully disabled -> mark {234:true, 238:false}. 238 in modified_set -> relevant. Regen: {fc08::2}. | true | not pruned (modified) | yes -> dependents=[] | 237: {fc08::2} | {238, 237} |
 
-Part 2 (VPN Context): Lookup fc06::2 in `m_nexthop_to_RIBNHG_map` -> **no match** (no VPN NHGs use fc06::2 as gateway). Done.
+Part 2 (VPN Context): Lookup fc06::2 in `m_nexthop_to_vrf_RIBNHG` -> **no match** (no VPN NHGs use fc06::2 as gateway). Done.
 
 ### Test remote failure
 * Scenario: The route 2064:100::1d/128 is withdrawn.
@@ -1625,7 +1693,7 @@ Part 2 (VPN Context): Lookup fc06::2 in `m_nexthop_to_RIBNHG_map` -> **no match*
   * Part 1 starting from node 237
     - No update
   * Part 2 starting from nexthop 2064:100::1d
-    - Find NHG node 240 from  m_nexthop_to_RIBNHG_map, trigger fib_nhg_back_walk from this node
+    - Find NHG node 240 from  m_nexthop_to_vrf_RIBNHG, trigger fib_nhg_back_walk from this node
     1. **240** (STARTING, leaf `2064:100::1d`):
         - Match. Self-ref disabled. Skip APPDB. `modified_set += 240`.
     2. **239** (ECMP, depends `[240, 241]`):
@@ -1643,7 +1711,7 @@ Part 1 (Global Table Context):
 
 Part 1 result: No updates. 237 has no dependents in the Standard cluster.
 
-Part 2 (VPN Context): Lookup 2064:100::1d in `m_nexthop_to_RIBNHG_map` -> **finds NHG 240** (gateway 2064:100::1d via SRv6).
+Part 2 (VPN Context): Lookup 2064:100::1d in `m_nexthop_to_vrf_RIBNHG` -> **finds NHG 240** (gateway 2064:100::1d via SRv6).
 
 Part 2 backwalk from 240 (using `walk_spec_sonic_nhg` / `prune_spec_sonic_nhg`):
 
