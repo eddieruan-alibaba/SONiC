@@ -2257,27 +2257,59 @@ The test cases are implemented via gtest in `tests/mock_tests/fpmsyncd/nhg_nht_u
 - Sets up `NHGMgr` with mock APPDB pipeline
 - Provides `loadTopologyFromJson(filename)`: loads topology JSON, parses each entry via `fib::from_json_string()`, adds entries in dependency order via `addNHGFull()`
 - Provides `resetAllEnableGroups(ids)`: resets all entries to enabled state
+- Provides `runPart1Backwalk(nexthop, start_id)`: runs Part 1 backwalk (`fib_nhg_back_walk()` with `fib_nhg_walk_spec_for_node_quick_fixup` / `fib_nhg_prune_spec_for_node_quick_fixup`), returns the walking context for inspection of `visited_node_set`, `modified_node_set`, etc.
+- Provides `runPart2Backwalk(nexthop, start_id)`: runs Part 2 (sonic_nhg) backwalk (`fib_nhg_back_walk()` with `fib_nhg_walk_spec_for_node_quick_fixup_sonic_nhg` / `fib_nhg_prune_spec_for_node_quick_fixup_sonic_nhg`), returns the walking context
 
 ### Test Cases
 
+#### Backwalk Tests (using `runPart1Backwalk` / `runPart2Backwalk`)
+
+These tests call `fib_nhg_back_walk()` directly via helpers to inspect walk context sets (`visited_node_set`, `modified_node_set`) and `m_resolved_enable_group` state.
+
 | Test Name | Topology | Trigger | Key Assertions |
 |:----------|:---------|:--------|:---------------|
-| `Topology1_LocalFailure` | test_topology_1.json | `fib_nhg_trigger_node_quick_fixup("fc06::2", 237)` | 237 self-disabled; 238 has {237:false, 234:true}; APPDB has only fc08::2 |
-| `Topology1_RemoteFailure1` | test_topology_1.json | `fib_nhg_trigger_node_quick_fixup("2064:200::1e", 258)` | 258 self-disabled; 256 has {258:false, 257:true}; 238 untouched |
-| `Topology1_RemoteFailure2` | test_topology_1.json | `fib_nhg_trigger_node_quick_fixup("1::1", 263)` | 263 self-disabled; 262 has {263:false, 264:true}; 256,238 untouched |
-| `Topology2_LocalFailure` | test_topology_2.json | `fib_nhg_trigger_node_quick_fixup("fc06::2", 235)` | 235 self-disabled; 236 has {235:false, 232:true}; 232 untouched |
-| `Topology2_RemoteFailure1` | test_topology_2.json | `fib_nhg_trigger_node_quick_fixup("2064:100::1d", 260)` | 260 all-disabled; 263 has {260:false, 264:true} |
-| `Topology2_RemoteFailure3` | test_topology_2.json | `fib_nhg_trigger_node_quick_fixup("2::2", 270)` | 270 all-disabled; 269 has {270:false, 266:true} |
-| `Topology3_LocalFailure` | test_topology_3.json | `fib_nhg_trigger_node_quick_fixup("fc06::2", 238)` | 238 self-disabled; 237 has {238:false, 234:true}; APPDB has only fc08::2 |
-| `ResolvedEnableGroupInit` | test_topology_1.json | (no trigger) | Leaf 234: size=1, {234:true}; ECMP 238: size=2, {234:true, 237:true}; Composite 256: {257:true, 258:true} |
-| `ResetEnableGroup` | test_topology_1.json | Trigger then reset | After trigger: {237:false}; after reset: {237:true} |
+| `Topology1_LocalFailure` | test_topology_1.json | `runPart1Backwalk("fc06::2", 237)` | visited={237,238,257,256,258,263,262,264}; 234 not visited; 237 self-disabled; 238: {234:true, 237:false} |
+| `Topology1_RemoteFailure1` | test_topology_1.json | `runPart1Backwalk("2064:200::1e", 258)` | visited={258,256}; 258: {238:false}; 256: {258:false, 257:true}; 238 untouched |
+| `Topology1_RemoteFailure2` | test_topology_1.json | `runPart1Backwalk("1::1", 263)` | visited={263,262}; 263: {238:false}; 262: {263:false, 264:true}; 256,238 untouched |
+| `Topology2_LocalFailure` | test_topology_2.json | `runPart1Backwalk("fc06::2", 235)` | visited={235,236,260,263,264,266,269}; 232,270 not visited; 235 self-disabled; 236: {235:false, 232:true}; 266: {235:false}; 269: {266:false, 270:true}; 232 untouched |
+| `Topology2_RemoteFailure1` | test_topology_2.json | `runPart1Backwalk("2064:100::1d", 260)` | visited={260,263}; 260: {236:false}; 263: {260:false, 264:true} |
+| `Topology2_RemoteFailure2` | test_topology_2.json | `runPart1Backwalk("1::1", 263)` | visited={263}, modified={}; 263: enable_group untouched {260:true, 264:true} (no gateway match, no modified deps, ECMP not pruned) |
+| `Topology2_RemoteFailure3` | test_topology_2.json | `runPart1Backwalk("2::2", 270)` | visited={270,269}; 270: {232:false}; 269: {270:false, 266:true} |
+| `Topology3_LocalFailure` | test_topology_3.json | `runPart1Backwalk("fc06::2", 238)` | visited={238,237}; 238 self-disabled; 237: {238:false, 234:true} |
+| `Topology3_RemoteFailure` | test_topology_3.json | Part 1: `runPart1Backwalk("2064:100::1d", 237)` then Part 2: `runPart2Backwalk("2064:100::1d", 240)` | Part 1: visited={237}, modified={} (ECMP, no gateway match); 237 untouched. Part 2: visited={240,239}; 240 self-disabled; 239: {240:false, 241:true}; updated_sonic_nhg_keys non-empty |
+
+#### General Tests (using `fib_nhg_trigger_node_quick_fixup`)
+
+These tests use the high-level `fib_nhg_trigger_node_quick_fixup()` API to verify end-to-end behavior.
+
+| Test Name | Topology | Trigger | Key Assertions |
+|:----------|:---------|:--------|:---------------|
+| `ResolvedEnableGroupInit` | test_topology_1.json | (no trigger) | Leaf 234: size=1, {234:true}; Leaf 237: size=1, {237:true}; ECMP 238: size=2, {234:true, 237:true}; Composite 256: {257:true, 258:true} |
+| `ResetEnableGroup` | test_topology_1.json | `fib_nhg_trigger_node_quick_fixup("fc06::2", 237)` then `resetResolvedEnableGroup()` | After trigger: {237:false}; after reset: {237:true} |
 | `NonExistentResolvedNhgId` | test_topology_1.json | `fib_nhg_trigger_node_quick_fixup("fc06::2", 99999)` | No crash (graceful fallback to getGlobalEntries) |
 
+#### `resolveLeafEnableFlags()` Tests
+
+These tests verify the recursive tree walk that bridges depends-level `m_resolved_enable_group` to leaf-level flags for `getNextHopGroupFields()` filtering.
+
+| Test Name | Topology | Trigger | Key Assertions |
+|:----------|:---------|:--------|:---------------|
+| `ResolveLeafEnableFlags` | test_topology_1.json | `fib_nhg_trigger_node_quick_fixup("fc06::2", 237)` | Leaf 234: {234:true}; Leaf 237: {237:false}; ECMP 238: {234:true, 237:false}; Intermediate 257 (depends=[238]): resolves to {234:true, 237:false} by recursing into 238; Composite 256 (depends=[257,258]): {234:true, 237:false} via union merge |
+| `ResolveLeafEnableFlagsRemoteFailure` | test_topology_1.json | `fib_nhg_trigger_node_quick_fixup("2064:200::1e", 258)` | 256 (depends=[257,258], 258 disabled): all leaves reachable via enabled 257, result {234:true, 237:true}; 258 (depends=[238], all-disabled): skips 238 subtree, result {234:false, 237:false} |
+
 ### Main Test Flow
+Two test patterns are used:
+
+**Pattern 1 — Direct backwalk (topology-specific tests):**
 1. Load topology JSON, convert to `fib::NextHopGroupFull` objects, add via `addNHGFull()` in dependency order
-2. Trigger `fib_nhg_trigger_node_quick_fixup()` with appropriate nexthop and resolved_nhg_id
-3. Assert `m_resolved_enable_group` state on affected entries
-4. Assert APPDB content via `m_nextHopTable->hget()` where applicable
+2. Call `runPart1Backwalk(nexthop, start_id)` (or `runPart2Backwalk()` for sonic_nhg phase)
+3. Assert walk context: `visited_node_set`, `modified_node_set`
+4. Assert `m_resolved_enable_group` state on affected entries
+
+**Pattern 2 — High-level trigger (general and resolveLeafEnableFlags tests):**
+1. Load topology JSON via `loadTopologyFromJson()`
+2. Trigger `fib_nhg_trigger_node_quick_fixup(nexthop, resolved_nhg_id)` — runs both Part 1 and Part 2 internally
+3. Assert `m_resolved_enable_group` state and/or `resolveLeafEnableFlags()` output on affected entries
 
 ## sonic-mgmt system level tests
 In current sonic-mgmt, https://github.com/sonic-net/sonic-mgmt/blob/master/tests/srv6/test_srv6_basic_sanity.py provides a system level test with 7 nodes topology. The previous example's three Topologies are built from this 7 nodes topology. Tests are added to the existing `test_srv6_basic_sanity.py` file with helpers in `srv6_utils.py`.
