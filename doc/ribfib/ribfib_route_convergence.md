@@ -96,19 +96,18 @@
     - [Test local failure](#test-local-failure)
     - [Test remote failure](#test-remote-failure)
 - [8. Test cases](#8-test-cases)
-  - [FRR topotest](#frr-topotest)
-  - [sonic-fib unit test](#sonic-fib-unit-test)
-  - [sonic-swss unit test](#sonic-swss-unit-test)
+  - [8.1 FRR topotest](#81-frr-topotest)
+  - [8.2 sonic-fib unit test](#82-sonic-fib-unit-test)
+  - [8.3 sonic-swss unit test](#83-sonic-swss-unit-test)
     - [Test Fixture: `FpmSyncdNhtBackwalk`](#test-fixture-fpmsyncdnhtbackwalk)
     - [Test Cases](#test-cases)
       - [Backwalk Tests (using `runPart1Backwalk` / `runPart2Backwalk`)](#backwalk-tests-using-runpart1backwalk--runpart2backwalk)
       - [General Tests (using `fib_nhg_trigger_node_quick_fixup`)](#general-tests-using-fib_nhg_trigger_node_quick_fixup)
       - [`resolveLeafEnableFlags()` Tests](#resolveleafenableflags-tests)
     - [Main Test Flow](#main-test-flow)
-  - [sonic-mgmt system level tests](#sonic-mgmt-system-level-tests)
-    - [7-Node Topology Key Connections](#7-node-topology-key-connections)
-    - [Route Origins](#route-origins)
-    - [Helper Functions](#helper-functions)
+  - [8.4 sonic-mgmt system level tests](#84-sonic-mgmt-system-level-tests)
+    - [8.4.1 7-Node Topology Key Connections](#841-7-node-topology-key-connections)
+    - [8.4.2 Helper Functions](#842-helper-functions)
       - [1. apply\_config\_cmmds\_to\_vtysh(nbrhost, cmd\_list)](#1-apply_config_cmmds_to_vtyshnbrhost-cmd_list)
       - [2. Record Collection](#2-record-collection)
       - [3. APPDB Assertion Helpers](#3-appdb-assertion-helpers)
@@ -116,10 +115,8 @@
         - [assert\_appdb\_nexthop\_present](#assert_appdb_nexthop_present)
       - [4. verify\_nhg\_before\_routes(duthost, testcase\_name, trigger\_nexthop)](#4-verify_nhg_before_routesduthost-testcase_name-trigger_nexthop)
       - [5. verify\_no\_nhg\_update(duthost, testcase\_name)](#5-verify_no_nhg_updateduthost-testcase_name)
-    - [Failure Triggers](#failure-triggers)
-    - [Recovery](#recovery)
-    - [Assertions](#assertions)
-    - [Test Cases](#test-cases-1)
+    - [8.4.3 Failure Triggers](#843-failure-triggers)
+    - [8.4.4 Test Cases](#844-test-cases)
       - [Topology 1 Static Routes (applied on PE3)](#topology-1-static-routes-applied-on-pe3)
       - [Topology 2 Static Routes (applied on PE3)](#topology-2-static-routes-applied-on-pe3)
       - [`test_topology1_local_failure`](#test_topology1_local_failure)
@@ -159,7 +156,7 @@ This Low-Level Design (LLD) is deliberately authored with implementation-grade s
   * C++14 is the required baseline for all SONiC C++ components (sonic-swss, sonic-fib, swss-common, etc.).
   * Do not use C++17/20 features unless the target branch explicitly migrates.
 ## 2. Header Include Paths: Export vs. Internal Files
-When generating codes for Debian-packaged components, distinguish between public export headers and internal implementation files:'**
+When generating code for Debian-packaged components, distinguish between public export headers and internal implementation files:'**
 | File Type | Purpose | Include Path Style | Example |
 |-----------|---------|-------------------|---------|
 | **Export Header** | Installed to `/usr/include/...` for external consumers | Use **installed/public paths** (no `src/` prefix) | `#include "nexthopgroupfull.h"` |
@@ -215,7 +212,7 @@ static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
 
 When a state change is detected (state_changed == true), Zebra must propagate the following context to dplane to enable informed FIB NHT updates.
 
-The purpose for zebra sends NHT event to fpmsyncd is to give enought information which informs that the current nexthop its holding will make some changes. So fpmsyncd's FIB module could response this event properly for reducing traffic loss window. Therefore, the following information would need to pass down to dplane when state_changed is set.
+The purpose for zebra sends NHT event to fpmsyncd is to give enough information which informs that the current nexthop its holding will make some changes. So fpmsyncd's FIB module could response this event properly for reducing traffic loss window. Therefore, the following information would need to pass down to dplane when state_changed is set.
 
 | Field | Purpose | Unresolved Value |
 |:---|:---|:---|
@@ -227,7 +224,7 @@ The purpose for zebra sends NHT event to fpmsyncd is to give enought information
 
 Note: Currently, all related context is sent to dplane. Processing follows a phased approach:
 * Phase 1: Trigger backwalk when an RNH prefix becomes unresolvable. Walk from the previous resolved NHG ID to prune failed paths from dependent NHGs.
-* Future: Extend handling to cover other caases.
+* Future: Extend handling to cover other cases.
 
 In `zebra_rnh_resolve_nexthop_entry()`, route resolution may temporarily fail if a route entry is still queued and awaiting processing. To prevent unnecessary traffic disruption, we suppress the NHT dplane event (but NOT the entire evaluation) during this window.
 
@@ -2241,7 +2238,7 @@ graph TD
         - `238` fully disabled → mark: `{234: true, 238: false}`.
         - Flat: `{fc08::2}`. APPDB written. `modified_set += 237`.
   * Part 2 starting from fc06::2
-    _ no match for fc06::2 in m_nexthop_to_vrf_RIBNHG
+    - no match for fc06::2 in m_nexthop_to_vrf_RIBNHG
 
 **Call flow trace**:
 
@@ -2290,13 +2287,13 @@ Part 2 backwalk from 240 (using `walk_spec_sonic_nhg` / `prune_spec_sonic_nhg`):
 
 
 # 8. Test cases
-## FRR topotest
+## 8.1 FRR topotest
 TODO
 
-## sonic-fib unit test
+## 8.2 sonic-fib unit test
 Generated via LLM
 
-## sonic-swss unit test
+## 8.3 sonic-swss unit test
 The test cases are implemented via gtest in `tests/mock_tests/fpmsyncd/nhg_nht_ut.cpp`, using the `FpmSyncdNhtBackwalk` fixture class.
 
 ### Test Fixture: `FpmSyncdNhtBackwalk`
@@ -2357,10 +2354,10 @@ Two test patterns are used:
 2. Trigger `fib_nhg_trigger_node_quick_fixup(nexthop, resolved_nhg_id)` — runs both Part 1 and Part 2 internally
 3. Assert `m_resolved_enable_group` state and/or `resolveLeafEnableFlags()` output on affected entries
 
-## sonic-mgmt system level tests
+## 8.4 sonic-mgmt system level tests
 In current sonic-mgmt, https://github.com/sonic-net/sonic-mgmt/blob/master/tests/srv6/test_srv6_basic_sanity.py provides a system level test with 7 nodes topology. The previous example's three Topologies are built from this 7 nodes topology. Tests are added to the existing `test_srv6_basic_sanity.py` file with helpers in `srv6_utils.py`.
 
-### 7-Node Topology Key Connections
+### 8.4.1 7-Node Topology Key Connections
 
 | Node | Interface | IP | Peer Node | Peer Interface | Peer IP | Role |
 |------|-----------|-----|-----------|----------------|---------|------|
@@ -2371,7 +2368,7 @@ In current sonic-mgmt, https://github.com/sonic-net/sonic-mgmt/blob/master/tests
 | PE2 | Ethernet0 | fc00::76 | P1 | Ethernet116 | fc00::75 | PE2 uplink |
 | PE2 | Ethernet8 | fc03::1 | P3 | Ethernet8 | fc03::2 | PE2 uplink |
 
-### Route Origins
+**Route Origins**
 
 | Prefix | Origin Node | Reaches PE3 via |
 |--------|-------------|-----------------|
@@ -2380,7 +2377,7 @@ In current sonic-mgmt, https://github.com/sonic-net/sonic-mgmt/blob/master/tests
 
 Both prefixes have 2-path ECMP at PE3: via fc06::2 (Ethernet12→P4) and fc08::2 (Ethernet4→P2).
 
-### Helper Functions
+### 8.4.2 Helper Functions
 
 All helper functions are added to `tests/srv6/srv6_utils.py`:
 
@@ -2406,11 +2403,11 @@ The following information would be collected for each test case.
 * vtysh command "show ip route vrf Vrf1 nexthop"
 * vtysh command "show next rib"
 
-The naming conversion is <testcase name>_<collect location>_<content name>.txt
+The naming convention is <testcase name>_<collect location>_<content name>.txt
 * testcase name : given from test case. 
 * collect_location :
   * "before" triggered in start_record_collection
-  * "after" trggered in stop_record_collection
+  * "after" triggered in stop_record_collection
 * Contents collecting methods
   * Files in /var/log or /var/log/swss, 
     via "tail -f" to trace, for example
@@ -2475,7 +2472,7 @@ Args:
 
 This is used in BGP remote failure case, where is no NHG update.
 
-### Failure Triggers
+### 8.4.3 Failure Triggers
 
 Three failure mechanisms are used across the six test cases:
 
@@ -2485,7 +2482,7 @@ Three failure mechanisms are used across the six test cases:
 | **Remote BGP shutdown** | PE1: `vtysh -c 'configure terminal' -c 'router bgp 64600' -c 'neighbor 2064:300::1f shutdown'` | PE1 | BGP NOTIFICATION sent, immediate clean withdrawal of 2064:100::1d (single ROUTE_DELETE, no replacement) |
 | **Remote IGP sequential** | Step 1: P1 `sudo ifconfig Ethernet112 down`, wait 20s; Step 2: P3 `sudo ifconfig Ethernet4 down` | P1, P3 | First link causes route replacement (PE1 reconverges via remaining path); 20s cooldown lets replacement settle; second link causes full withdrawal of 2064:100::1d |
 
-### Recovery
+**Recovery**
 
 | Failure | Recovery | Wait Time |
 |---------|----------|-----------|
@@ -2493,20 +2490,20 @@ Three failure mechanisms are used across the six test cases:
 | Remote BGP | PE1: `vtysh -c 'configure terminal' -c 'router bgp 64600' -c 'no neighbor 2064:300::1f shutdown'` | 15s |
 | Remote IGP | P1: `sudo ifconfig Ethernet112 up` + P3: `sudo ifconfig Ethernet4 up` | 15s |
 
-### Assertions
+**Assertions**
 
 | Test Case | Assert ABSENT | Assert PRESENT | Timeout | Verification |
 |-----------|---------------|----------------|---------|--------------|
-| T1/T2 Local (fc06::2 down) | `fc06::2` | `fc08::2` | 10s | `verify_nhg_before_routes` |
-| T1/T2 Remote BGP (PE1 BGP shutdown) | `2064:100::1d` | `2064:200::1e` | 10s | `verify_no_nhg_update` |
+| T1/T2 Local (fc06::2 down) | `fc06::2` | `fc08::2` | 10s | `verify_nhg_before_routes` Check if NHG updates would be triggered by NHT before routes updates|
+| T1/T2 Remote BGP (PE1 BGP shutdown) | `2064:100::1d` | `2064:200::1e` | 10s | `verify_no_nhg_update`, check if there is no NHG update since it is BGP routes switch from 2->1 one by one case |
 | T1/T2 Remote IGP (sequential link failure) | `2064:100::1d` | `2064:200::1e` | 30s | `TODO` |
 
-### Test Cases
+### 8.4.4 Test Cases
 
 We create 6 independent test cases (3 per topology). Each test:
 - Sets up its own topology (static routes via vtysh)
 - Verifies initial state before triggering failure
-- Asserts APPDB convergence after failure
+- Asserts after APPDB or swss rec file verification fails
 - Cleans up (recover + remove routes)
 
 #### Topology 1 Static Routes (applied on PE3)
@@ -2556,6 +2553,7 @@ PE3: sudo ifconfig Ethernet12 down
 PE1: vtysh -c 'configure terminal' -c 'router bgp 64600' -c 'neighbor 2064:300::1f shutdown'
 ```
 BGP NOTIFICATION sent immediately → clean single ROUTE_DELETE, no intermediate replacement.
+
 
 **Verification:**
 - `assert_appdb_nexthop_removed(duthost, "2064:100::1d", timeout=10)`
@@ -2675,7 +2673,7 @@ This section documents all the issues met when using LLM to brainstorm, code gen
 * **Trace-Driven Validation**: The LLM generates structured call flow trace artifacts and can cross-validate them against the step-by-step intermediate results to ensure behavioral consistency.
 * **topology json error**: Flagged topology json error with missing nexthop type and gate in topology 2's json after LLM comparing LLD with json file file.
 
-## First Round Code Genearted
+## First Round Code Generated
 | Repo | link | Comments |Unit Test cases |
 |:-----|:---------------|:---------------------|:-----------------|
 | sonic-frr | https://github.com/eddieruan-alibaba/sonic-frr/tree/eruan-ai | AI codes with fixing `Cached bogus pointer` | No, need to add topotest |
@@ -2764,7 +2762,7 @@ Before recursing into each depends entry in m_resolvedGroup, check m_resolved_en
 
 **Resolution**: Implemented `resolveLeafEnableFlags()` which recursively walks the depends tree from the current node down to leaves, respecting enable/disable gates at each level. `getNextHopGroupFields()` now calls this method once before iterating `m_resolvedGroup`, and uses the returned leaf-level flags for filtering. See [Method Update: `RIBNHGEntry::getNextHopGroupFields()`](#method-update-ribnhgentrygetnexthopgroupfields) for full details.
 
-## Second Round Code Genearted
+## Second Round Code Generated
 | Repo | link | Comments |Unit Test cases |
 |:-----|:---------------|:---------------------|:-----------------|
 | sonic-frr | https://github.com/eddieruan-alibaba/sonic-frr/tree/eruan-ai3 | | |
