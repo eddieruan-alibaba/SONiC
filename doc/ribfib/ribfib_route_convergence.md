@@ -14,15 +14,41 @@
     - [Extended Dplane Context](#extended-dplane-context)
     - [RNH Info Structure Definition](#rnh-info-structure-definition)
     - [Event Generation Workflow](#event-generation-workflow)
+      - [`copy_state()` Fix: Preserve NHE ID](#copy_state-fix-preserve-nhe-id)
+      - [NHT Event Generation in `zebra_rnh_eval_nexthop_entry()`](#nht-event-generation-in-zebra_rnh_eval_nexthop_entry)
+      - [`dplane_nht_event_update()` Function](#dplane_nht_event_update-function)
+      - [Accessor Functions](#accessor-functions)
+      - [Boilerplate Switch Cases](#boilerplate-switch-cases)
+      - [`zebra_rnh_clear_nhc_flag()` Update](#zebra_rnh_clear_nhc_flag-update)
+      - [Include Dependency](#include-dependency)
 - [4. FPM Message Serialization (SONiC Integration)](#4-fpm-message-serialization-sonic-integration)
+  - [Include Dependency](#include-dependency-1)
+  - [Custom Message Type](#custom-message-type)
+  - [Encoder Function: `netlink_nhtevent_msg_encode()`](#encoder-function-netlink_nhtevent_msg_encode)
+    - [Field Extraction and NULL Handling](#field-extraction-and-null-handling)
+    - [JSON Serialization](#json-serialization)
+    - [Error Handling](#error-handling)
+    - [Debug Logging](#debug-logging)
+    - [Memory](#memory)
+  - [Switch Case in `fpm_nl_enqueue()`](#switch-case-in-fpm_nl_enqueue)
 - [5. SONiC-fib Enhancements for NHT events](#5-sonic-fib-enhancements-for-nht-events)
   - [NhtEvent JSON Schema](#nhtevent-json-schema)
     - [Example: nexthop becomes unresolved (Phase 1 trigger)](#example-nexthop-becomes-unresolved-phase-1-trigger)
   - [Generated Code](#generated-code)
+    - [Design Decisions](#design-decisions)
   - [C API for FRR Integration](#c-api-for-frr-integration)
+  - [Generated Code Templates](#generated-code-templates)
+    - [Template: `nhtevent.h.j2` (mode: `header`)](#template-nhteventhj2-mode-header)
+    - [Template: `nhtevent.cpp.j2` (mode: `source`)](#template-nhteventcppj2-mode-source)
+    - [Template: `nhtevent_json.h.j2` (mode: `json_bindings`)](#template-nhtevent_jsonhj2-mode-json_bindings)
+    - [Template: `c_nhtevent.h.j2` (mode: `c_header`)](#template-c_nhteventhj2-mode-c_header)
+    - [`render_schema.py` Template Selection](#render_schemapy-template-selection)
   - [Data Flow](#data-flow)
 - [6. FPMsyncd Modifications](#6-fpmsyncd-modifications)
   - [Existing NHG MGR codes](#existing-nhg-mgr-codes)
+  - [NHT Event Message Reception (`onNhtEventMsg`)](#nht-event-message-reception-onnhteventmsg)
+    - [Message Dispatch in `onMsgRaw()`](#message-dispatch-in-onmsgraw)
+    - [`RouteSync::onNhtEventMsg()`](#routesynconnhteventmsg)
   - [`fib_nhg_trigger_node_quick_fixup()`](#fib_nhg_trigger_node_quick_fixup)
     - [Part 1: Global Table Context Backwalk](#part-1-global-table-context-backwalk)
     - [Part 2: VPN Context Backwalk](#part-2-vpn-context-backwalk)
@@ -33,12 +59,16 @@
       - [Recursion Flowchart](#recursion-flowchart)
   - [Changes for Part 1](#changes-for-part-1)
     - [Changes in  `class RIBNHGEntry`](#changes-in--class-ribnhgentry)
+    - [New Helper Methods](#new-helper-methods)
+      - [`isAllDisabled()` (static file-scope helper)](#isalldisabled-static-file-scope-helper)
+      - [`RIBNHGEntry::resetResolvedEnableGroup()`](#ribnhgentryresetresolvedenablegroup)
+      - [`RIBNHGEntry::regenerateFields()`](#ribnhgentryregeneratefields)
+      - [`RIBNHGEntry::addDependentsMember()` / `removeDependentsMember()`](#ribnhgentryadddependentsmember--removedependentsmember)
+      - [`RIBNHGTable::addNHGDependents()` / `removeNHGDependents()`](#ribnhgtableaddnhgdependents--removenhgdependents)
     - [Method Update: `RIBNHGEntry::getNextHopGroupFields()`](#method-update-ribnhgentrygetnexthopgroupfields)
-      - [Algorithm Summary](#algorithm-summary)
-        - [📦 Entry Types](#-entry-types)
-        - [⚙️ Operating Modes](#️-operating-modes)
-        - [🚦 Marker Behavior](#-marker-behavior)
-        - [📉 Slot Consumption](#-slot-consumption)
+      - [New Helper: `resolveLeafEnableFlags()`](#new-helper-resolveleafenableflags)
+      - [Updated `getNextHopGroupFields()` Usage](#updated-getnexthopgroupfields-usage)
+      - [Example Trace (Topology 1, fc06::2 down, NHG 257)](#example-trace-topology-1-fc062-down-nhg-257)
     - [`fib_nhg_walk_spec_for_node_quick_fixup()`](#fib_nhg_walk_spec_for_node_quick_fixup)
     - [`fib_nhg_prune_spec_for_node_quick_fixup()`](#fib_nhg_prune_spec_for_node_quick_fixup)
     - [Part 1's call flow](#part-1s-call-flow)
@@ -69,6 +99,12 @@
   - [FRR topotest](#frr-topotest)
   - [sonic-fib unit test](#sonic-fib-unit-test)
   - [sonic-swss unit test](#sonic-swss-unit-test)
+    - [Test Fixture: `FpmSyncdNhtBackwalk`](#test-fixture-fpmsyncdnhtbackwalk)
+    - [Test Cases](#test-cases)
+      - [Backwalk Tests (using `runPart1Backwalk` / `runPart2Backwalk`)](#backwalk-tests-using-runpart1backwalk--runpart2backwalk)
+      - [General Tests (using `fib_nhg_trigger_node_quick_fixup`)](#general-tests-using-fib_nhg_trigger_node_quick_fixup)
+      - [`resolveLeafEnableFlags()` Tests](#resolveleafenableflags-tests)
+    - [Main Test Flow](#main-test-flow)
   - [sonic-mgmt system level tests](#sonic-mgmt-system-level-tests)
     - [7-Node Topology Key Connections](#7-node-topology-key-connections)
     - [Route Origins](#route-origins)
@@ -76,13 +112,22 @@
       - [1. apply\_config\_cmmds\_to\_vtysh(nbrhost, cmd\_list)](#1-apply_config_cmmds_to_vtyshnbrhost-cmd_list)
       - [2. Record Collection](#2-record-collection)
       - [3. APPDB Assertion Helpers](#3-appdb-assertion-helpers)
+        - [assert\_appdb\_nexthop\_removed](#assert_appdb_nexthop_removed)
+        - [assert\_appdb\_nexthop\_present](#assert_appdb_nexthop_present)
+      - [4. verify\_nhg\_before\_routes(duthost, testcase\_name, trigger\_nexthop)](#4-verify_nhg_before_routesduthost-testcase_name-trigger_nexthop)
+      - [5. verify\_no\_nhg\_update(duthost, testcase\_name)](#5-verify_no_nhg_updateduthost-testcase_name)
     - [Failure Triggers](#failure-triggers)
     - [Recovery](#recovery)
     - [Assertions](#assertions)
-    - [Test Cases](#test-cases)
+    - [Test Cases](#test-cases-1)
       - [Topology 1 Static Routes (applied on PE3)](#topology-1-static-routes-applied-on-pe3)
       - [Topology 2 Static Routes (applied on PE3)](#topology-2-static-routes-applied-on-pe3)
-      - [Test workflow per test case](#test-workflow-per-test-case)
+      - [`test_topology1_local_failure`](#test_topology1_local_failure)
+      - [`test_topology1_remote_bgp_failure`](#test_topology1_remote_bgp_failure)
+      - [`test_topology1_remote_igp_failure`](#test_topology1_remote_igp_failure)
+      - [`test_topology2_local_failure`](#test_topology2_local_failure)
+      - [`test_topology2_remote_bgp_failure`](#test_topology2_remote_bgp_failure)
+      - [`test_topology2_remote_igp_failure`](#test_topology2_remote_igp_failure)
 - [9. Appendix](#9-appendix)
   - [Key refinements identified during LLM-assisted brainstorming:](#key-refinements-identified-during-llm-assisted-brainstorming)
   - [First Round Code Genearted](#first-round-code-genearted)
@@ -91,6 +136,7 @@
     - [Cached bogus pointer](#cached-bogus-pointer)
     - [Misunderstand m\_nexthop](#misunderstand-m_nexthop)
     - [Not handle IBNHGEntry::getNextHopGroupFields()'s change paths based on m\_resolved\_enable\_group](#not-handle-ibnhgentrygetnexthopgroupfieldss-change-paths-based-on-m_resolved_enable_group)
+  - [Second Round Code Genearted](#second-round-code-genearted)
 
 
 # 1. Problem Statements
@@ -2339,6 +2385,7 @@ Both prefixes have 2-path ECMP at PE3: via fc06::2 (Ethernet12→P4) and fc08::2
 All helper functions are added to `tests/srv6/srv6_utils.py`:
 
 #### 1. apply_config_cmmds_to_vtysh(nbrhost, cmd_list)
+Apply a list of vtysh configuration commands to the given device. 
 
 ```python
 def apply_config_cmmds_to_vtysh(nbrhost, cmd_list):
@@ -2349,86 +2396,114 @@ def apply_config_cmmds_to_vtysh(nbrhost, cmd_list):
 ```
 
 #### 2. Record Collection
+The following information would be collected for each test case. 
+* swss.rec from /var/log/swss
+* sairedis.rec from /var/log/swss
+* syslog from /var/log
+* NEXTHOP_GROUP_TABLE* entries from appdb
+* NHG_FULL_STATE_TABLE* entries from appstatedb
+* vtysh command "show ipv6 route nexthop"
+* vtysh command "show ip route vrf Vrf1 nexthop"
+* vtysh command "show next rib"
 
-```python
-def start_record_collection(duthost, testcase_name):
-    """Start tailing swss.rec and sairedis.rec on DUT."""
-    for rec in ["swss.rec", "sairedis.rec"]:
-        prefix = rec.replace(".rec", "")
-        outfile = "/tmp/{}_{}.rec".format(prefix, testcase_name)
+The naming conversion is <testcase name>_<collect location>_<content name>.txt
+* testcase name : given from test case. 
+* collect_location :
+  * "before" triggered in start_record_collection
+  * "after" trggered in stop_record_collection
+* Contents collecting methods
+  * Files in /var/log or /var/log/swss, 
+    via "tail -f" to trace, for example
+```
         duthost.command(
             "nohup tail -f /var/log/swss/{} > {} 2>&1 &".format(rec, outfile))
-
-def stop_record_collection(duthost, testcase_name):
-    """Stop record collection and copy files to ~/testlogs/."""
-    duthost.command("pkill -f 'tail -f /var/log/swss'")
-    duthost.command("mkdir -p ~/testlogs")
-    for prefix in ["swss", "sairedis"]:
-        src = "/tmp/{}_{}.rec".format(prefix, testcase_name)
-        duthost.command("cp {} ~/testlogs/".format(src))
 ```
+    via "pkill " to stop tracing
+```
+        duthost.command("pkill -f 'tail -f /var/log/swss'")
+```
+  * redis DB content collecting, need to create a function collect_db_entries() which would put a python script to collect redis contents at the device and save it to a file. 
+  * vtysh command would just run it directly and save the log into a file.
+`
 
 #### 3. APPDB Assertion Helpers
 
-```python
-def assert_appdb_nexthop_removed(duthost, nexthop, timeout=10, poll_interval=1):
-    """Poll APPDB until nexthop is absent from ALL NHG entries' nexthop field."""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        result = duthost.command("redis-cli -n 0 KEYS 'NEXTHOP_GROUP_TABLE:*'")
-        keys = parse_appdb_keys(result)
-        found = False
-        for key in keys:
-            nh_result = duthost.command("redis-cli -n 0 HGET '{}' nexthop".format(key))
-            nh_value = nh_result.get('stdout', '')
-            if nexthop in nh_value:
-                found = True
-                break
-        if not found:
-            return  # success
-        time.sleep(poll_interval)
-    pytest_assert(False, "Nexthop '{}' still present in APPDB after {}s".format(nexthop, timeout))
+##### assert_appdb_nexthop_removed
+This function would poll all APPDB's NEXTHOP_GROUP_TABLE* entries and check each entry's nexthop field has provided pathern and assert if we have the given pattern in the nexthop field. We will skip report failure for the following cases.
 
-def assert_appdb_nexthop_present(duthost, nexthop):
-    """Assert nexthop exists in at least one NHG entry."""
-    result = duthost.command("redis-cli -n 0 KEYS 'NEXTHOP_GROUP_TABLE:*'")
-    keys = parse_appdb_keys(result)
-    for key in keys:
-        nh_result = duthost.command("redis-cli -n 0 HGET '{}' nexthop".format(key))
-        nh_value = nh_result.get('stdout', '')
-        if nexthop in nh_value:
-            return  # found
-    pytest_assert(False, "Nexthop '{}' not found in any APPDB NHG entry".format(nexthop))
+    1. Gateway NHGs for the given nexthop (gate field matches), or
+    2. SRv6 NHGs (any recursive depends has non-null nh_srv6), or
+    3. NHGs pending deletion in zebra (show nexthop rib has "Time to Deletion").
+
+To avoid too many RPC calls, we create a python help and put it to the device, then run this python script. 
+
+##### assert_appdb_nexthop_present
+Similar to above one, except we check if the given pattern is presented.
+
+
+#### 4. verify_nhg_before_routes(duthost, testcase_name, trigger_nexthop)
+
+Args:
+  * duthost: DUT host object
+  * testcase_name: test case name (matches swss_{name}.rec)
+  * trigger_nexthop: the nexthop address whose NEIGH_TABLE DEL is the trigger
+
+Asserts that all `NEXTHOP_GROUP_TABLE` updates appear before any `ROUTE_TABLE` update after the `NEIGH_TABLE DEL` trigger line in the swss record file. This confirms PIC fast-path pushes NHG updates before RIB reconvergence route updates in local failure case.
+
+Two categories of `NEXTHOP_GROUP_TABLE` updates after `ROUTE_TABLE` are legitimately excluded from violation checks via `_is_skipable_nhg()`:
+- The NHG's RIB entry has SRv6 info in its depends (zebra convergence NHG update, not PIC)
+- The NHG's RIB ID has "Time to Deletion" set (pending deletion)
+
+```python
+def _is_skipable_nhg(duthost, sonic_nhg_id):
+    """Returns True if the NHG should be excluded from PIC ordering violation checks.
+
+    Skips when the NHG's RIB entry has SRv6 depends (zebra convergence)
+    or the RIB ID is pending deletion.
+    """
+    # Runs an inline Python script on the DUT to query NHG_FULL_STATE_TABLE
+    # and vtysh for the RIB ID's deletion status.
+
+def verify_nhg_before_routes(duthost, testcase_name, trigger_nexthop):
+    """Assert all NEXTHOP_GROUP_TABLE updates happen before ROUTE_TABLE after trigger."""
 ```
+
+#### 5. verify_no_nhg_update(duthost, testcase_name)
+Args:
+  * duthost: DUT host object
+  * testcase_name: test case name (matches swss_{name}.rec)
+
+This is used in BGP remote failure case, where is no NHG update.
 
 ### Failure Triggers
 
-| Test Case | Mechanism | Nodes Affected | Expected NHT Event |
-|-----------|-----------|----------------|-------------------|
-| **Local failure** | PE3: `sudo ifconfig Ethernet12 down` | PE3 link-down | fc06::2 unreachable, `current_resolved_nhg_id=0` |
-| **Remote failure** | P1: `sudo ifconfig Ethernet112 down` + P3: `sudo ifconfig Ethernet4 down` | PE1 isolated | 2064:100::1d withdrawn, `current_resolved_nhg_id=0` |
+Three failure mechanisms are used across the six test cases:
 
-**Why this remote failure mechanism works**: PE1 has only two uplinks: Ethernet0→P1 and Ethernet4→P3. Shutting down the peer-side interfaces (P1:Ethernet112 + P3:Ethernet4) causes immediate link-down detection on PE1. BGP sessions drop within seconds (link-level, no 180s hold timer wait). PE1's originated route (2064:100::1d) is withdrawn from the network. No BFD is available in this topology.
+| Mechanism | Trigger | Nodes | Effect |
+|-----------|---------|-------|--------|
+| **Local link down** | PE3: `sudo ifconfig Ethernet12 down` | PE3 | fc06::2 unreachable, immediate NHT event |
+| **Remote BGP shutdown** | PE1: `vtysh -c 'configure terminal' -c 'router bgp 64600' -c 'neighbor 2064:300::1f shutdown'` | PE1 | BGP NOTIFICATION sent, immediate clean withdrawal of 2064:100::1d (single ROUTE_DELETE, no replacement) |
+| **Remote IGP sequential** | Step 1: P1 `sudo ifconfig Ethernet112 down`, wait 20s; Step 2: P3 `sudo ifconfig Ethernet4 down` | P1, P3 | First link causes route replacement (PE1 reconverges via remaining path); 20s cooldown lets replacement settle; second link causes full withdrawal of 2064:100::1d |
 
 ### Recovery
 
-| Failure | Recovery Command | Wait Time |
-|---------|-----------------|-----------|
+| Failure | Recovery | Wait Time |
+|---------|----------|-----------|
 | Local | PE3: `sudo ifconfig Ethernet12 up` | 10s |
-| Remote | P1: `sudo ifconfig Ethernet112 up` + P3: `sudo ifconfig Ethernet4 up` | 15s |
+| Remote BGP | PE1: `vtysh -c 'configure terminal' -c 'router bgp 64600' -c 'no neighbor 2064:300::1f shutdown'` | 15s |
+| Remote IGP | P1: `sudo ifconfig Ethernet112 up` + P3: `sudo ifconfig Ethernet4 up` | 15s |
 
 ### Assertions
 
-| Test Case | Assert ABSENT from nexthop field | Assert PRESENT in nexthop field | Timeout |
-|-----------|--------------------------------|-------------------------------|---------|
-| T1 Local (fc06::2 down) | `fc06::2` | `fc08::2` | 10s |
-| T1 Remote (PE1 isolated) | `2064:100::1d` | `2064:200::1e` | 30s |
-| T2 Local (fc06::2 down) | `fc06::2` | `fc08::2` | 10s |
-| T2 Remote (PE1 isolated) | `2064:100::1d` | `2064:200::1e` | 30s |
+| Test Case | Assert ABSENT | Assert PRESENT | Timeout | Verification |
+|-----------|---------------|----------------|---------|--------------|
+| T1/T2 Local (fc06::2 down) | `fc06::2` | `fc08::2` | 10s | `verify_nhg_before_routes` |
+| T1/T2 Remote BGP (PE1 BGP shutdown) | `2064:100::1d` | `2064:200::1e` | 10s | `verify_no_nhg_update` |
+| T1/T2 Remote IGP (sequential link failure) | `2064:100::1d` | `2064:200::1e` | 30s | `TODO` |
 
 ### Test Cases
 
-We create 4 independent test cases for Topology 1 and Topology 2. Each test:
+We create 6 independent test cases (3 per topology). Each test:
 - Sets up its own topology (static routes via vtysh)
 - Verifies initial state before triggering failure
 - Asserts APPDB convergence after failure
@@ -2454,18 +2529,142 @@ ipv6 route 4::4/128 2::2
 ipv6 route 4::4/128 3::3
 ```
 
-#### Test workflow per test case
+#### `test_topology1_local_failure`
 
-1. Apply static routes on PE3 via `apply_config_cmmds_to_vtysh()`
-2. Wait 5s for NHG convergence
-3. Verify initial state: both nexthops present in APPDB
-4. Start record collection
-5. Trigger failure (local: `ifconfig Ethernet12 down` on PE3; remote: `ifconfig Ethernet112 down` on P1 + `ifconfig Ethernet4 down` on P3)
-6. Assert APPDB convergence (poll with timeout)
-7. Stop record collection
-8. Verify record patterns (NEXTHOP_GROUP_TABLE operations present)
-9. Recover (bring interfaces back up), wait for reconvergence
-10. Teardown: remove static routes via `no ipv6 route ...`
+**Static routes:** TOPO1 applied on PE3
+
+**Trigger:**
+```
+PE3: sudo ifconfig Ethernet12 down
+```
+
+**Verification:**
+- `assert_appdb_nexthop_removed(duthost, "fc06::2", timeout=10)`
+- `assert_appdb_nexthop_present(duthost, "fc08::2")`
+- `verify_nhg_before_routes(duthost, "t1_local", "fc06::2")` — all NHG updates precede route updates in swss record
+
+**Recovery:** PE3 `sudo ifconfig Ethernet12 up`, wait 10s
+
+
+
+#### `test_topology1_remote_bgp_failure`
+
+**Static routes:** TOPO1 applied on PE3
+
+**Trigger:**
+```
+PE1: vtysh -c 'configure terminal' -c 'router bgp 64600' -c 'neighbor 2064:300::1f shutdown'
+```
+BGP NOTIFICATION sent immediately → clean single ROUTE_DELETE, no intermediate replacement.
+
+**Verification:**
+- `assert_appdb_nexthop_removed(duthost, "2064:100::1d", timeout=10)`
+- `assert_appdb_nexthop_present(duthost, "2064:200::1e")`
+- `verify_no_nhg_update` check swss record file for this test case and there is no NHG event. 
+
+**Recovery:** PE1 `vtysh -c 'configure terminal' -c 'router bgp 64600' -c 'no neighbor 2064:300::1f shutdown'`, wait 15s
+
+Here is an example swss record file 
+```
+2026-05-20.02:43:45.709923|ROUTE_TABLE:2::2|DEL
+2026-05-20.02:43:45.749917|ROUTE_TABLE:3::3|DEL
+2026-05-20.02:43:48.145862|SRV6_MY_SID_TABLE:32:16:32:0:fd00:203:203:3::|DEL
+2026-05-20.02:43:48.147758|SRV6_MY_SID_TABLE:32:16:32:0:fd00:203:203:33::|DEL
+2026-05-20.02:43:50.513075|ROUTE_TABLE:1::1|SET|nexthop_group:1|protocol:0xc4
+2026-05-20.02:43:51.335303|ROUTE_TABLE:1::1|SET|nexthop_group:15|protocol:0xc4
+2026-05-20.02:43:52.233996|ROUTE_TABLE:2::2|SET|nexthop_group:1|protocol:0xc4
+2026-05-20.02:43:53.154349|ROUTE_TABLE:3::3|SET|nexthop_group:1|protocol:0xc4
+2026-05-20.02:43:54.078665|ROUTE_TABLE:3::3|SET|nexthop_group:18|protocol:0xc4
+2026-05-20.02:43:54.978983|ROUTE_TABLE:4::4|SET|nexthop_group:1|protocol:0xc4
+2026-05-20.02:44:20.638916|ROUTE_TABLE:Vrf1:192.100.0.1|SET|pic_context_id:2|nexthop_group:8|nexthop:|vpn_sid:|seg_src:|ifname:
+2026-05-20.02:44:20.680869|ROUTE_TABLE:Vrf1:192.100.0.4|SET|pic_context_id:2|nexthop_group:8|nexthop:|vpn_sid:|seg_src:|ifname:
+2026-05-20.02:44:20.680970|ROUTE_TABLE:Vrf1:192.100.0.2|SET|pic_context_id:2|nexthop_group:8|nexthop:|vpn_sid:|seg_src:|ifname:
+2026-05-20.02:44:20.681057|ROUTE_TABLE:Vrf1:192.100.0.10|SET|pic_context_id:2|nexthop_group:8|nexthop:|vpn_sid:|seg_src:|ifname:
+2026-05-20.02:44:20.681085|ROUTE_TABLE:Vrf1:192.100.0.3|SET|pic_context_id:2|nexthop_group:8|nexthop:|vpn_sid:|seg_src:|ifname:
+2026-05-20.02:44:20.681099|ROUTE_TABLE:Vrf1:192.100.0.9|SET|pic_context_id:2|nexthop_group:8|nexthop:|vpn_sid:|seg_src:|ifname:
+2026-05-20.02:44:20.681111|ROUTE_TABLE:Vrf1:192.100.0.6|SET|pic_context_id:2|nexthop_group:8|nexthop:|vpn_sid:|seg_src:|ifname:
+2026-05-20.02:44:20.681123|ROUTE_TABLE:Vrf1:192.100.0.8|SET|pic_context_id:2|nexthop_group:8|nexthop:|vpn_sid:|seg_src:|ifname:
+2026-05-20.02:44:20.681134|ROUTE_TABLE:Vrf1:192.100.0.7|SET|pic_context_id:2|nexthop_group:8|nexthop:|vpn_sid:|seg_src:|ifname:
+2026-05-20.02:44:20.681146|ROUTE_TABLE:Vrf1:192.100.0.5|SET|pic_context_id:2|nexthop_group:8|nexthop:|vpn_sid:|seg_src:|ifname:
+```
+
+#### `test_topology1_remote_igp_failure`
+
+**Static routes:** TOPO1 applied on PE3
+
+**Trigger (sequential):**
+```
+Step 1: P1: sudo ifconfig Ethernet112 down
+        → wait 20s (route replace event cools down, ASIC offload settles)
+Step 2: P3: sudo ifconfig Ethernet4 down
+        → start record collection here (captures only the withdrawal/PIC event)
+```
+First link causes a route replacement (PE1 reconverges via remaining uplink). The 20s gap lets the replacement fully settle before the second link triggers full withdrawal of `2064:100::1d`, exercising PIC edge handling.
+
+**Verification:**
+- `assert_appdb_nexthop_removed(duthost, "2064:100::1d", timeout=30)`
+- `assert_appdb_nexthop_present(duthost, "2064:200::1e")`
+- `verify_record_has_pattern(duthost, "t1_remote_igp", "NEXTHOP_GROUP_TABLE")`
+
+**Recovery:** P1 `sudo ifconfig Ethernet112 up` + P3 `sudo ifconfig Ethernet4 up`, wait 15s
+
+Here is an example swss record file 
+```
+```
+
+#### `test_topology2_local_failure`
+
+**Static routes:** TOPO2 applied on PE3
+
+**Trigger:**
+```
+PE3: sudo ifconfig Ethernet12 down
+```
+
+**Verification:**
+- `assert_appdb_nexthop_removed(duthost, "fc06::2", timeout=10)`
+- `assert_appdb_nexthop_present(duthost, "fc08::2")`
+- `verify_nhg_before_routes(duthost, "t2_local", "fc06::2")` — all NHG updates precede route updates in swss record
+
+**Recovery:** PE3 `sudo ifconfig Ethernet12 up`, wait 10s
+
+
+#### `test_topology2_remote_bgp_failure`
+
+**Static routes:** TOPO2 applied on PE3
+
+**Trigger:**
+```
+PE1: vtysh -c 'configure terminal' -c 'router bgp 64600' -c 'neighbor 2064:300::1f shutdown'
+```
+BGP NOTIFICATION sent immediately → clean single ROUTE_DELETE, no intermediate replacement.
+
+**Verification:**
+- `assert_appdb_nexthop_removed(duthost, "2064:100::1d", timeout=10)`
+- `assert_appdb_nexthop_present(duthost, "2064:200::1e")`
+- `verify_no_nhg_update` check swss record file for this test case and there is no NHG event. 
+
+**Recovery:** PE1 `vtysh -c 'configure terminal' -c 'router bgp 64600' -c 'no neighbor 2064:300::1f shutdown'`, wait 15s
+
+
+#### `test_topology2_remote_igp_failure`
+
+**Static routes:** TOPO2 applied on PE3
+
+**Trigger (sequential):**
+```
+Step 1: P1: sudo ifconfig Ethernet112 down
+        → wait 20s (route replace event cools down, ASIC offload settles)
+Step 2: P3: sudo ifconfig Ethernet4 down
+        → start record collection here (captures only the withdrawal/PIC event)
+```
+Same rationale as topology 1 IGP failure. Topology 2's direct + recursive mix means the withdrawal triggers PIC edge handling across both direct-path (2::2, 3::3) and recursive-path (1::1) NHGs.
+
+**Verification:**
+- `assert_appdb_nexthop_removed(duthost, "2064:100::1d", timeout=30)`
+- `assert_appdb_nexthop_present(duthost, "2064:200::1e")`
+
+**Recovery:** P1 `sudo ifconfig Ethernet112 up` + P3 `sudo ifconfig Ethernet4 up`, wait 15s
 
 # 9. Appendix
 This section documents all the issues met when using LLM to brainstorm, code generation, compile and testing. The main skills are similar to skills listed in https://github.com/obra/superpowers/tree/main/skills and https://github.com/numman-ali/openskills. At high level, we use brainstorm skill to go over LLD in detail and use writing-plan skill to generate codes after brainstorming.
@@ -2564,3 +2763,12 @@ Before recursing into each depends entry in m_resolvedGroup, check m_resolved_en
 **Root Cause**: `m_resolved_enable_group` tracks depends-level IDs (e.g., {238: true}), while `m_resolvedGroup` contains leaf-level IDs (e.g., {234, 237}). A direct lookup of leaf ID 237 in `m_resolved_enable_group` misses because 237 is not a key there — only the depends ID 238 is.
 
 **Resolution**: Implemented `resolveLeafEnableFlags()` which recursively walks the depends tree from the current node down to leaves, respecting enable/disable gates at each level. `getNextHopGroupFields()` now calls this method once before iterating `m_resolvedGroup`, and uses the returned leaf-level flags for filtering. See [Method Update: `RIBNHGEntry::getNextHopGroupFields()`](#method-update-ribnhgentrygetnexthopgroupfields) for full details.
+
+## Second Round Code Genearted
+| Repo | link | Comments |Unit Test cases |
+|:-----|:---------------|:---------------------|:-----------------|
+| sonic-frr | https://github.com/eddieruan-alibaba/sonic-frr/tree/eruan-ai3 | | |
+| sonic-buildimage | https://github.com/eddieruan-alibaba/sonic-buildimage/tree/eruan-ai3 | |  |
+| sonic-fib | https://github.com/eddieruan-alibaba/sonic-fib/tree/eruan-ai3 | | |
+| sonic-swss | https://github.com/eddieruan-alibaba/sonic-swss/tree/eruan-ai3 |  |  |
+| sonic-mgmt | https://code.alibaba-inc.com/SONiC/sonic-mgmt/tree/eruan-ai3/ | | |
