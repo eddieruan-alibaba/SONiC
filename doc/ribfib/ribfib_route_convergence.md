@@ -109,12 +109,15 @@
     - [8.4.1 7-Node Topology Key Connections](#841-7-node-topology-key-connections)
     - [8.4.2 Helper Functions](#842-helper-functions)
       - [1. apply\_config\_cmmds\_to\_vtysh(nbrhost, cmd\_list)](#1-apply_config_cmmds_to_vtyshnbrhost-cmd_list)
-      - [2. Record Collection](#2-record-collection)
-      - [3. APPDB Assertion Helpers](#3-appdb-assertion-helpers)
+      - [2. collect\_db\_entries(duthost, testcase\_name, db\_name, collecting\_prefix)](#2-collect_db_entriesduthost-testcase_name-db_name-collecting_prefix)
+      - [3 Record Collection](#3-record-collection)
+      - [4. APPDB Assertion Helpers](#4-appdb-assertion-helpers)
         - [assert\_appdb\_nexthop\_removed](#assert_appdb_nexthop_removed)
         - [assert\_appdb\_nexthop\_present](#assert_appdb_nexthop_present)
-      - [4. verify\_nhg\_before\_routes(duthost, testcase\_name, trigger\_nexthop)](#4-verify_nhg_before_routesduthost-testcase_name-trigger_nexthop)
-      - [5. verify\_no\_nhg\_update(duthost, testcase\_name)](#5-verify_no_nhg_updateduthost-testcase_name)
+      - [5. verify\_nhg\_before\_routes(duthost, testcase\_name, trigger\_nexthop)](#5-verify_nhg_before_routesduthost-testcase_name-trigger_nexthop)
+      - [6. verify\_no\_nhg\_update(duthost, testcase\_name)](#6-verify_no_nhg_updateduthost-testcase_name)
+      - [7. get\_dut\_timestamp(duthost)](#7-get_dut_timestampduthost)
+      - [8. \_parse\_rec\_timestamp(line):](#8-_parse_rec_timestampline)
     - [8.4.3 Failure Triggers](#843-failure-triggers)
     - [8.4.4 Test Cases](#844-test-cases)
       - [Topology 1 Static Routes (applied on PE3)](#topology-1-static-routes-applied-on-pe3)
@@ -127,13 +130,13 @@
       - [`test_topology2_remote_igp_failure`](#test_topology2_remote_igp_failure)
 - [9. Appendix](#9-appendix)
   - [Key refinements identified during LLM-assisted brainstorming:](#key-refinements-identified-during-llm-assisted-brainstorming)
-  - [First Round Code Genearted](#first-round-code-genearted)
+  - [First Round Code Generated](#first-round-code-generated)
   - [Couple issues fixed for compiling](#couple-issues-fixed-for-compiling)
   - [Unit Test issues:](#unit-test-issues)
     - [Cached bogus pointer](#cached-bogus-pointer)
     - [Misunderstand m\_nexthop](#misunderstand-m_nexthop)
     - [Not handle IBNHGEntry::getNextHopGroupFields()'s change paths based on m\_resolved\_enable\_group](#not-handle-ibnhgentrygetnexthopgroupfieldss-change-paths-based-on-m_resolved_enable_group)
-  - [Second Round Code Genearted](#second-round-code-genearted)
+  - [Second Round Code Generated](#second-round-code-generated)
 
 
 # 1. Problem Statements
@@ -2355,7 +2358,7 @@ Two test patterns are used:
 3. Assert `m_resolved_enable_group` state and/or `resolveLeafEnableFlags()` output on affected entries
 
 ## 8.4 sonic-mgmt system level tests
-In current sonic-mgmt, https://github.com/sonic-net/sonic-mgmt/blob/master/tests/srv6/test_srv6_basic_sanity.py provides a system level test with 7 nodes topology. The previous example's three Topologies are built from this 7 nodes topology. Tests are added to the existing `test_srv6_basic_sanity.py` file with helpers in `srv6_utils.py`.
+Within the current sonic-mgmt framework, system-level SRv6 validation is anchored by [tests/srv6/test_srv6_basic_sanity.py](https://github.com/sonic-net/sonic-mgmt/blob/master/tests/srv6/test_srv6_basic_sanity.py), which implements a baseline 7-node topology. The three topologies discussed previously are derived from this reference setup. All new test additions are integrated directly into this file, with supporting utilities centralized in `srv6_utils.py` to promote maintainability and reuse.
 
 ### 8.4.1 7-Node Topology Key Connections
 
@@ -2379,31 +2382,79 @@ Both prefixes have 2-path ECMP at PE3: via fc06::2 (Ethernet12→P4) and fc08::2
 
 ### 8.4.2 Helper Functions
 
-All helper functions are added to `tests/srv6/srv6_utils.py`:
+All helper functions are added to `tests/srv6/srv6_utils.py`. The main design rules for these helper functions are
+
+* Try to create local python script which could run multiple commands on the device instead of using multiple RPCs, one for each commands.
+* For vtysh configuration, we could use `-c` option to group multiple configuration commands together. 
 
 #### 1. apply_config_cmmds_to_vtysh(nbrhost, cmd_list)
 Apply a list of vtysh configuration commands to the given device. 
 
-```python
-def apply_config_cmmds_to_vtysh(nbrhost, cmd_list):
-    """Apply a list of vtysh configuration-mode commands to a device."""
-    for input_cmd in cmd_list:
-        cmd = "vtysh -c 'configure terminal' -c '{}'".format(input_cmd)
-        nbrhost.command(cmd)
+Inputs:
+* nbrhost: the device which would apply a list of commands.
+* cmd_list: a list of commands.
+
+
+#### 2. collect_db_entries(duthost, testcase_name, db_name, collecting_prefix)
+A util function to collect a given dadabase's entries into a json file.
+
+Inputs:
+* duthost: the device to run to collect redis db entries. 
+* testcase_name: test case name
+* db_name: data base name, used to find out redis db port and instance
+* collecting_prefix: the collecting entries's prefix.
+
+First, we use db_name to find out redis db port and instance. Initially, we only support two db instances with hardcoded value approach. 
+
+```
+    # 1. Determine Redis credentials
+    if db_name == "appdb":
+        db_num, port = 0, 6378
+    elif db_name == "appstatedb":
+        db_num, port = 14, 6379
+    else:
+        logger.error(f"Invalid db_name {db_name}")
+        return
 ```
 
-#### 2. Record Collection
-The following information would be collected for each test case. 
-* swss.rec from /var/log/swss
-* sairedis.rec from /var/log/swss
-* syslog from /var/log
-* NEXTHOP_GROUP_TABLE* entries from appdb
-* NHG_FULL_STATE_TABLE* entries from appstatedb
-* vtysh command "show ipv6 route nexthop"
-* vtysh command "show ip route vrf Vrf1 nexthop"
-* vtysh command "show next rib"
+Then we need to create a python script which would get a list of entries keys from redis db and read each keys' value one byt one. This python script would be saved to the dut device. The output file name is in the following format
+
+```
+  <testcase_name>_<collecting_prefix>.json
+```
+
+The following is an sample of how to copy over this python script to the device. 
+
+```
+    script_b64 = base64.b64encode(script_content.encode('utf-8')).decode('ascii')
+
+    script_path = "/tmp/collect_redis.sh"
+    out_path = f"{test_log_dir}/{testcase_name}_{collecting_prefix}.json"
+
+    # Write script using base64 (bypasses Jinja2)
+    duthost.shell(f"echo '{script_b64}' | base64 -d > {script_path}")
+    duthost.command(f"chmod +x {script_path}")
+```
+
+
+#### 3 Record Collection
+There are two set of collection functions
+1. start_record_collection(duthost, testcase_name)
+Capture a 'before' snapshot, then start tailing swss.rec/sairedis.rec/syslog on DUT
+2. stop_record_collection(duthost, testcase_name)
+Stop tailing swss.rec/sairedis.rec/syslog on DUT, then capture a 'after' snapshot
+
+The following information would be taken in the snapshot. 
+* NEXTHOP_GROUP_TABLE* entries from appdb via collect_db_entries()
+* NHG_FULL_STATE_TABLE* entries from appstatedb via collect_db_entries()
+* Run the following vtysh commands on device and save them into a file on the device. For each command, we want the script to echo this command into the output file first, then save the output into the output file. That would make this final output file each to read. 
+  * "show ipv6 route nexthop"
+  * "show ip route vrf Vrf1 nexthop"
+  * "show ip route vrf Vrf1 192.100.0.1 nexthop"
+  * "show next rib"
 
 The naming convention is <testcase name>_<collect location>_<content name>.txt
+
 * testcase name : given from test case. 
 * collect_location :
   * "before" triggered in start_record_collection
@@ -2419,12 +2470,11 @@ The naming convention is <testcase name>_<collect location>_<content name>.txt
 ```
         duthost.command("pkill -f 'tail -f /var/log/swss'")
 ```
-  * redis DB content collecting, need to create a function collect_db_entries() which would put a python script to collect redis contents at the device and save it to a file. 
-  * vtysh command would just run it directly and save the log into a file.
+  * redis DB content collecting, via collect_db_entries() which would put a python script to collect redis contents at the device and save it to a file. 
+  * Batch vtysh commands would and save the log into a file.
 `
 
-#### 3. APPDB Assertion Helpers
-
+#### 4. APPDB Assertion Helpers
 ##### assert_appdb_nexthop_removed
 This function would poll all APPDB's NEXTHOP_GROUP_TABLE* entries and check each entry's nexthop field has provided pathern and assert if we have the given pattern in the nexthop field. We will skip report failure for the following cases.
 
@@ -2438,18 +2488,28 @@ To avoid too many RPC calls, we create a python help and put it to the device, t
 Similar to above one, except we check if the given pattern is presented.
 
 
-#### 4. verify_nhg_before_routes(duthost, testcase_name, trigger_nexthop)
+#### 5. verify_nhg_before_routes(duthost, testcase_name, trigger_nexthop)
+Assert all NEXTHOP_GROUP_TABLE updates happen before ROUTE_TABLE after trigger.
 
-Args:
-  * duthost: DUT host object
-  * testcase_name: test case name (matches swss_{name}.rec)
-  * trigger_nexthop: the nexthop address whose NEIGH_TABLE DEL is the trigger
+    After the NEIGH_TABLE DEL line for trigger_nexthop, verifies that no
+    ROUTE_TABLE entry appears before all NEXTHOP_GROUP_TABLE entries have
+    been written. This confirms PIC fast-path pushes NHG updates before
+    RIB reconvergence route updates.
 
-Asserts that all `NEXTHOP_GROUP_TABLE` updates appear before any `ROUTE_TABLE` update after the `NEIGH_TABLE DEL` trigger line in the swss record file. This confirms PIC fast-path pushes NHG updates before RIB reconvergence route updates in local failure case.
+    NEXTHOP_GROUP_TABLE updates caused by zebra convergence (where the NHG's
+    RIB ID has SRv6 info in its depends) are excluded from violation checks.
 
-Two categories of `NEXTHOP_GROUP_TABLE` updates after `ROUTE_TABLE` are legitimately excluded from violation checks via `_is_skipable_nhg()`:
-- The NHG's RIB entry has SRv6 info in its depends (zebra convergence NHG update, not PIC)
-- The NHG's RIB ID has "Time to Deletion" set (pending deletion)
+    ROUTE_TABLE entries with "protocol:kernel" (e.g. loopback routes) are
+    skipped since they are not part of the BGP/zebra reconvergence ordering.
+
+    Args:
+        duthost: DUT host object
+        testcase_name: test case name (matches swss_{name}.rec)
+        trigger_nexthop: the nexthop address whose NEIGH_TABLE DEL is the trigger
+        trigger_ts: datetime of the exceptional trigger; lines before this
+                    timestamp are ignored. Capture with get_dut_timestamp()
+                    immediately before firing the trigger. Optional — if None,
+                    all lines are checked.
 
 ```python
 def _is_skipable_nhg(duthost, sonic_nhg_id):
@@ -2458,19 +2518,46 @@ def _is_skipable_nhg(duthost, sonic_nhg_id):
     Skips when the NHG's RIB entry has SRv6 depends (zebra convergence)
     or the RIB ID is pending deletion.
     """
-    # Runs an inline Python script on the DUT to query NHG_FULL_STATE_TABLE
-    # and vtysh for the RIB ID's deletion status.
+
 
 def verify_nhg_before_routes(duthost, testcase_name, trigger_nexthop):
     """Assert all NEXTHOP_GROUP_TABLE updates happen before ROUTE_TABLE after trigger."""
 ```
 
-#### 5. verify_no_nhg_update(duthost, testcase_name)
-Args:
-  * duthost: DUT host object
-  * testcase_name: test case name (matches swss_{name}.rec)
+#### 6. verify_no_nhg_update(duthost, testcase_name)
+Assert no unexpected NEXTHOP_GROUP_TABLE SET operation in the swss record file.
 
-This is used in BGP remote failure case, where is no NHG update.
+    Used in BGP remote failure tests where route withdrawal should result in
+    only ROUTE_TABLE updates (2 paths to 1 path), with no NHG changes pushed
+    to hardware.
+
+    A NEXTHOP_GROUP_TABLE entry is NOT flagged as a violation when:
+      - its timestamp is before trigger_ts (pre-trigger state, not caused by
+        the test action)
+      - it is a DEL (deletion) rather than a SET
+      - the NHG's RIB entry has SRv6 info in its depends (legitimate zebra
+        convergence update), or its RIB ID is pending deletion. This is the
+        same skip logic used by _is_skipable_nhg().
+
+    Args:
+        duthost: DUT host object
+        testcase_name: test case name (matches swss_{name}.rec)
+        trigger_ts: datetime of the exceptional trigger; lines before this
+                    timestamp are ignored. Capture with get_dut_timestamp()
+                    immediately before firing the trigger. Optional — if None,
+                    all lines are checked.
+
+#### 7. get_dut_timestamp(duthost)
+eturn the current DUT time as a datetime object (one RPC call).
+
+    Uses the same microsecond precision as swss rec file timestamps so the
+    returned value can be compared directly against parsed rec line timestamps.
+
+#### 8. _parse_rec_timestamp(line):
+Extract the timestamp from a swss rec line as a datetime object.
+
+    Rec line format: YYYY-MM-DD.HH:MM:SS.ffffff|<rest>
+    Returns None if the line doesn't start with a recognizable timestamp.
 
 ### 8.4.3 Failure Triggers
 
@@ -2496,7 +2583,7 @@ Three failure mechanisms are used across the six test cases:
 |-----------|---------------|----------------|---------|--------------|
 | T1/T2 Local (fc06::2 down) | `fc06::2` | `fc08::2` | 10s | `verify_nhg_before_routes` Check if NHG updates would be triggered by NHT before routes updates|
 | T1/T2 Remote BGP (PE1 BGP shutdown) | `2064:100::1d` | `2064:200::1e` | 10s | `verify_no_nhg_update`, check if there is no NHG update since it is BGP routes switch from 2->1 one by one case |
-| T1/T2 Remote IGP (sequential link failure) | `2064:100::1d` | `2064:200::1e` | 30s | `TODO` |
+| T1/T2 Remote IGP (sequential link failure) | `2064:100::1d` | `2064:200::1e` | 30s | `TODO, need to enhance BGP to provide priority to infra routes first.` |
 
 ### 8.4.4 Test Cases
 
