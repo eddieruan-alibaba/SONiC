@@ -988,12 +988,52 @@ Here are current  nhg mgr 's  codes
 
 ## NHT Event Message Reception (`onNhtEventMsg`)
 
-### Message Dispatch in `onMsgRaw()`
+### FPM Link Layer: `fpmlink.h` / `fpmlink.cpp`
+
+**Define** (`fpmlink.h`): Add `RTM_NEWNHTEVENT` as a new netlink message type alongside existing custom types:
+```cpp
+#define RTM_DELSRV6VPNROUTE     3001
+#define RTM_NEWNHGFIB           5000
+#define RTM_DELNHGFIB           5001
+#define RTM_NEWNHTEVENT         6000
+```
+
+**Dispatch** (`fpmlink.cpp`): In `FpmLink::processFpmMessage()`, add `RTM_NEWNHTEVENT` to the raw-message routing condition (the `else if` block that handles types not supported by rtnl API):
+```cpp
+else if(nl_hdr->nlmsg_type == RTM_NEWNEXTHOP || nl_hdr->nlmsg_type == RTM_DELNEXTHOP
+        || nl_hdr->nlmsg_type == RTM_NEWNHGFIB || nl_hdr->nlmsg_type == RTM_DELNHGFIB
+        || nl_hdr->nlmsg_type == RTM_NEWNHTEVENT)
+{
+    /* rtnl api dont support RTM_NEWNEXTHOP/RTM_DELNEXTHOP/RTM_NEWNHTEVENT yet. Processing as raw message*/
+    processRawMsg(nl_hdr);
+}
+```
+
+### `onMsgRaw()` Whitelist Guard
+
+In `RouteSync::onMsgRaw()`, the whitelist guard at the top of the function must include `RTM_NEWNHTEVENT` to prevent early return:
+```cpp
+    && (h->nlmsg_type != RTM_NEWNHGFIB)
+    && (h->nlmsg_type != RTM_DELNHGFIB)
+    && (h->nlmsg_type != RTM_NEWNHTEVENT)
+    && (h->nlmsg_type != RTM_NEWSRV6VPNROUTE)
+```
+
+### Message Length Calculation and Dispatch in `onMsgRaw()`
 The NHT event message uses netlink type `RTM_NEWNHTEVENT` (6000). In `onMsgRaw()`, the message length is calculated using `struct rtmsg` as the header:
 ```cpp
 else if(h->nlmsg_type == RTM_NEWNHTEVENT)
 {
     len = (int)(h->nlmsg_len - NLMSG_LENGTH(sizeof(struct rtmsg)));
+}
+```
+
+After length calculation and the `len < 0` guard, dispatch to the handler before reaching the NHG_FIB handlers:
+```cpp
+if(h->nlmsg_type == RTM_NEWNHTEVENT)
+{
+    onNhtEventMsg(h, len);
+    return;
 }
 ```
 
@@ -1275,6 +1315,101 @@ void RIBNHGTable::removeNHGDependents(std::set<uint32_t> depends, uint32_t id) {
 }
 ```
 
+### Method Update: `RIBNHGEntry::checkNeedUpdate()`
+
+Add a check at the end of `checkNeedUpdate()` (after existing field comparisons): if any entry in `m_resolved_enable_group` is `false`, force `updated = true`. This ensures that when FRR re-sends a valid NHG (e.g., after reconvergence), the sticky disabled state is cleared and HW state is re-pushed even if no other fields changed.
+
+```cpp
+    /* If PIC previously marked any path as disabled in m_resolved_enable_group,
+     * an incoming NHG refresh from FRR should trigger a full setEntry to clear
+     * the sticky disabled state and re-push HW state. */
+    for (const auto& kv : m_resolved_enable_group) {
+        if (!kv.second) {
+            updated = true;
+            break;
+        }
+    }
+```
+
+### Method Update: `NHGMgr::updateExistingNHGFull()`
+
+Two changes:
+
+**1. Refresh APP_DB when key unchanged**: In the existing branch where the SONiC NHG key hasn't changed (the `else` of the key-comparison `if`), add a refresh write when the entry has a valid SONiC object ID. This handles the case where `checkNeedUpdate()` detected a disabled `m_resolved_enable_group` — the entry needs its fields re-pushed even though the key is the same.
+
+```cpp
+        } else {
+            /* Key unchanged — refresh APP_DB with updated NHG fields */
+            if (entry->getSonicObjID() != 0) {
+                m_rib_nhg_table->writeToDB(entry);
+            }
+        }
+```
+
+**2. Early return before gateway section**: Add `return ret;` immediately after the NHG creation/refresh block closes, before the existing "check if sonic gateway nhg object updated" section. This skips the gateway object update logic during normal updates (gateway updates are handled separately during initial creation).
+
+```cpp
+    }
+    return ret;
+    // Ignore Gateway update
+```
+
+### Method Update: `NHGMgr::addNewNHGFull()` — Index Map Population
+
+After `addEntry()` succeeds and before the "Process NHG offload" section, populate the nexthop-to-NHG index maps. The distinction between global and VRF maps uses `hasSonicGatewayObj()`:
+
+```cpp
+    /* Populate nexthop-to-NHG index maps for PIC backwalk */
+    const string& gw = entry->getGatewayAddress();
+    if (!gw.empty()) {
+        if (!entry->hasSonicGatewayObj()) {
+            /* Global table context (Part 1 fallback) */
+            m_rib_nhg_table->addGlobalEntry(gw, entry);
+        } else {
+            /* VRF/VPN context (Part 2) */
+            m_rib_nhg_table->addVrfEntry(gw, entry);
+        }
+    }
+```
+
+### Method Update: `NHGMgr::delNHGFull()` — Index Map Cleanup
+
+Before calling `m_rib_nhg_table->delEntry(id)`, remove the entry from index maps. Placement is after any sonic gateway object cleanup and before the actual table deletion:
+
+```cpp
+    /* Remove from nexthop-to-NHG index maps before deletion */
+    const string& gw = entry->getGatewayAddress();
+    if (!gw.empty()) {
+        if (!entry->hasSonicGatewayObj()) {
+            m_rib_nhg_table->removeGlobalEntry(gw, entry);
+        } else {
+            m_rib_nhg_table->removeVrfEntry(gw, entry);
+        }
+    }
+```
+
+### `backwalk` Parameter Threading
+
+The PIC backwalk uses a `bool backwalk` parameter threaded through the field generation call chain to enable leaf-disable filtering only during backwalk (not during normal zebra-event processing where FRR is the source of truth).
+
+**Declaration changes** (in `nhgmgr.h`):
+```cpp
+int syncFvVector(bool backwalk = false);
+int getNHGFields(bool backwalk = false);
+int getNextHopGroupFields(bool backwalk = false);
+```
+
+**`regenerateFields()`** calls `syncFvVector(true)` to enable filtering:
+```cpp
+int regenerateFields() {
+    return syncFvVector(true);
+}
+```
+
+**Call chain**: `regenerateFields()` → `syncFvVector(true)` → `getNHGFields(true)` → `getNextHopGroupFields(true)` → `resolveLeafEnableFlags()` + skip disabled leaves.
+
+Normal FRR-event path continues to call `syncFvVector()` (default `false`), which skips the leaf-disable filter entirely.
+
 ### Method Update: `RIBNHGEntry::getNextHopGroupFields()`
 Before iterating `m_resolvedGroup` to build the flat nexthop/ifname/weight strings, call `resolveLeafEnableFlags()` to determine each leaf's effective enable/disable status. Skip any leaf that resolves to disabled.
 
@@ -1337,19 +1472,25 @@ std::unordered_map<uint32_t, bool> RIBNHGEntry::resolveLeafEnableFlags() {
 #### Updated `getNextHopGroupFields()` Usage
 
 ```cpp
-int RIBNHGEntry::getNextHopGroupFields() {
+int RIBNHGEntry::getNextHopGroupFields(bool backwalk) {
     // ...
-    /* Resolve leaf-level enable flags by walking the depends tree */
-    auto leaf_flags = resolveLeafEnableFlags();
+
+    /* Only apply leaf-disable filter during PIC backwalk.
+     * For zebra events, zebra is the source of truth — all paths are valid. */
+    std::unordered_map<uint32_t, bool> leaf_flags;
+    if (backwalk) {
+        leaf_flags = resolveLeafEnableFlags();
+    }
 
     for (const auto &nh: m_resolvedGroup) {
         uint32_t id = nh.first;
 
-        /* Skip disabled paths based on resolved leaf flags */
-        auto leaf_it = leaf_flags.find(id);
-        if (leaf_it != leaf_flags.end() && !leaf_it->second) {
-            SWSS_LOG_NOTICE("NextHop id %d skipped (disabled via resolved leaf flags)", id);
-            continue;
+        if (backwalk) {
+            auto leaf_it = leaf_flags.find(id);
+            if (leaf_it != leaf_flags.end() && !leaf_it->second) {
+                SWSS_LOG_NOTICE("NextHop id %d skipped (disabled via resolved leaf flags)", id);
+                continue;
+            }
         }
         // ... build nexthop, ifname, weight strings from enabled entries
     }
@@ -2654,8 +2795,43 @@ These tests verify the recursive tree walk that bridges depends-level `m_resolve
 | `ResolveLeafEnableFlags` | test_topology_1.json | `fib_nhg_trigger_node_quick_fixup("fc06::2", 237)` | Leaf 234: {234:true}; Leaf 237: {237:false}; ECMP 238: {234:true, 237:false}; Intermediate 257 (depends=[238]): resolves to {234:true, 237:false} by recursing into 238; Composite 256 (depends=[257,258]): {234:true, 237:false} via union merge |
 | `ResolveLeafEnableFlagsRemoteFailure` | test_topology_1.json | `fib_nhg_trigger_node_quick_fixup("2064:200::1e", 258)` | 256 (depends=[257,258], 258 disabled): all leaves reachable via enabled 257, result {234:true, 237:true}; 258 (depends=[238], all-disabled): skips 238 subtree, result {234:false, 237:false} |
 
+#### Function-Level Unit Tests
+
+These tests target individual functions for 80% code coverage of the PIC backwalk infrastructure. They use the same `FpmSyncdNhtBackwalk` fixture but focus on isolated behavior rather than full topology walks.
+
+| Test Name | Function Under Test | Setup | Key Assertions |
+|:----------|:-------------------|:------|:---------------|
+| `CheckNeedUpdate_DisabledEnableGroup` | `RIBNHGEntry::checkNeedUpdate()` | Load topology, trigger backwalk to disable path, then call `checkNeedUpdate()` with same NHG data | `updated` is `true` even though fields are identical (disabled m_resolved_enable_group forces update) |
+| `CheckNeedUpdate_AllEnabled` | `RIBNHGEntry::checkNeedUpdate()` | Load topology, no backwalk, call `checkNeedUpdate()` with same NHG data | `updated` is `false` (no disabled entries, no field changes) |
+| `GlobalMapAddRemove` | `addGlobalEntry()` / `removeGlobalEntry()` / `getGlobalEntries()` | Load topology, verify entries indexed by gateway | `getGlobalEntries("fc06::2")` returns leaf entries; after `removeGlobalEntry()`, set is empty |
+| `VrfMapAddRemove` | `addVrfEntry()` / `removeVrfEntry()` / `getVrfEntries()` | Load topology 3 (has VPN entries), verify VRF-context entries | `getVrfEntries("2064:100::1d")` returns VPN entries; after remove, returns empty |
+| `AddNHGDependents` | `RIBNHGTable::addNHGDependents()` | Load topology, check dependents lists | ECMP 238's depends={234,237} → 234.dependents contains 238, 237.dependents contains 238 |
+| `RemoveNHGDependents` | `RIBNHGTable::removeNHGDependents()` | Load topology, call `removeNHGDependents()` | 234.dependents no longer contains 238 |
+| `OnNhtEventMsg_Parse` | `RouteSync::onNhtEventMsg()` | Build a raw netlink message with RTM_NEWNHTEVENT type, embed JSON NHT event with `curr_resolved_nhg_id=0` | Backwalk triggered; verify `m_resolved_enable_group` disabled on target entry |
+| `OnNhtEventMsg_NonZeroCurr` | `RouteSync::onNhtEventMsg()` | Build netlink msg with `curr_resolved_nhg_id != 0` | Early return, no backwalk (Phase 1 only handles unreachable) |
+| `GetNextHopGroupFields_BackwalkTrue` | `RIBNHGEntry::getNextHopGroupFields(true)` | Load topology, disable path via backwalk, then call `getNextHopGroupFields(true)` on ECMP node | FV vector excludes disabled leaf nexthop; only enabled paths appear in nexthop string |
+| `GetNextHopGroupFields_BackwalkFalse` | `RIBNHGEntry::getNextHopGroupFields(false)` | Load topology, disable path via backwalk, then call `getNextHopGroupFields(false)` | FV vector includes ALL paths (no filtering, zebra is source of truth) |
+| `WriteToDB_Dedup` | `RIBNHGTable::writeToDB()` via `m_last_appdb_fields` | Load topology, trigger backwalk, call `writeToDB()` twice with same state | Second call skips APPDB write (compare-and-skip dedup via `m_last_appdb_fields`) |
+| `WriteToDB_Changed` | `RIBNHGTable::writeToDB()` | Trigger backwalk (changes fields), then trigger different backwalk | Both calls write to APPDB (fields differ from cached `m_last_appdb_fields`) |
+
+### Build Integration
+
+The test file is compiled via `tests/mock_tests/Makefile.am`. Add the new source:
+```makefile
+fpmsyncd_nhg_nht_ut_SOURCES = fpmsyncd/nhg_nht_ut.cpp
+```
+
+### Topology JSON Files
+
+Three topology JSON files define the test NHG graphs (located in `tests/mock_tests/fpmsyncd/`):
+- `test_topology_1.json` — 9 entries (NHGs 234, 237, 238, 256, 257, 258, 262, 263, 264)
+- `test_topology_2.json` — 9 entries (NHGs 232, 235, 236, 260, 263, 264, 266, 269, 270)
+- `test_topology_3.json` — 6 entries (NHGs 234, 237, 238, 239, 240, 241) — includes VRF/VPN entries
+
+Each file is a JSON object keyed by entry name, with values being full `NextHopGroupFull` JSON matching the sonic-fib schema.
+
 ### Main Test Flow
-Two test patterns are used:
+Three test patterns are used:
 
 **Pattern 1 — Direct backwalk (topology-specific tests):**
 1. Load topology JSON, convert to `fib::NextHopGroupFull` objects, add via `addNHGFull()` in dependency order
@@ -2667,6 +2843,11 @@ Two test patterns are used:
 1. Load topology JSON via `loadTopologyFromJson()`
 2. Trigger `fib_nhg_trigger_node_quick_fixup(nexthop, resolved_nhg_id)` — runs both Part 1 and Part 2 internally
 3. Assert `m_resolved_enable_group` state and/or `resolveLeafEnableFlags()` output on affected entries
+
+**Pattern 3 — Function-level isolation:**
+1. Load topology, optionally trigger backwalk to set up pre-conditions
+2. Call individual function under test directly
+3. Assert return value and/or side effects on entry state
 
 ## 8.4 sonic-mgmt system level tests
 Within the current sonic-mgmt framework, system-level SRv6 validation is anchored by [tests/srv6/test_srv6_basic_sanity.py](https://github.com/sonic-net/sonic-mgmt/blob/master/tests/srv6/test_srv6_basic_sanity.py), which implements a baseline 7-node topology. The three topologies discussed previously are derived from this reference setup. All new test additions are integrated directly into this file, with supporting utilities centralized in `srv6_utils.py` to promote maintainability and reusability.
