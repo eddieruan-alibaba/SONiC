@@ -627,20 +627,33 @@ A standalone encoder function following the same pattern as `netlink_nhg_fib_msg
 | `curr_resolved_prefix` | `dplane_ctx_get_rnh_curr_resolved_prefix(ctx)` | `::/0` |
 | `curr_resolved_nhg_id` | `dplane_ctx_get_rnh_curr_resolved_nhg_id(ctx)` | (uint32_t, always valid) |
 
-For each prefix field: if the pointer is non-NULL and `family != 0`, convert via `prefix2str()` into a `char[64]` buffer. Otherwise, use the fallback string `::/0`.
+For each prefix field: if the pointer is non-NULL and `family != 0`, convert via `prefix2str()` directly into the `struct C_NhtEvent` char array. Otherwise, write the fallback string `::/0` via `snprintf()`.
 
 ### JSON Serialization
 
-Populate a `struct C_NhtEvent` from the extracted fields, then pass its pointer to the C API:
+Declare a `struct C_NhtEvent` and populate its fields directly (no intermediate local buffers). Use `prefix2str()` or `snprintf()` to write directly into the struct's char arrays:
 ```c
-struct C_NhtEvent c_nht = {};
-/* rnh_prefix, prev_resolved_prefix, curr_resolved_prefix are char[64] locals
-   populated by prefix2str() or fallback above */
-strlcpy(c_nht.rnh_prefix, rnh_prefix, sizeof(c_nht.rnh_prefix));
-strlcpy(c_nht.prev_resolved_prefix, prev_resolved_prefix, sizeof(c_nht.prev_resolved_prefix));
-c_nht.prev_resolved_nhg_id = prev_resolved_nhg_id;
-strlcpy(c_nht.curr_resolved_prefix, curr_resolved_prefix, sizeof(c_nht.curr_resolved_prefix));
-c_nht.curr_resolved_nhg_id = curr_resolved_nhg_id;
+struct C_NhtEvent c_nht;
+memset(&c_nht, 0, sizeof(c_nht));
+
+if (rnh_pfx && rnh_pfx->family != 0)
+    prefix2str(rnh_pfx, c_nht.rnh_prefix, sizeof(c_nht.rnh_prefix));
+else
+    snprintf(c_nht.rnh_prefix, sizeof(c_nht.rnh_prefix), "::/0");
+
+if (prev_pfx && prev_pfx->family != 0)
+    prefix2str(prev_pfx, c_nht.prev_resolved_prefix, sizeof(c_nht.prev_resolved_prefix));
+else
+    snprintf(c_nht.prev_resolved_prefix, sizeof(c_nht.prev_resolved_prefix), "::/0");
+
+c_nht.prev_resolved_nhg_id = dplane_ctx_get_rnh_prev_resolved_nhg_id(ctx);
+
+if (curr_pfx && curr_pfx->family != 0)
+    prefix2str(curr_pfx, c_nht.curr_resolved_prefix, sizeof(c_nht.curr_resolved_prefix));
+else
+    snprintf(c_nht.curr_resolved_prefix, sizeof(c_nht.curr_resolved_prefix), "::/0");
+
+c_nht.curr_resolved_nhg_id = dplane_ctx_get_rnh_curr_resolved_nhg_id(ctx);
 
 json_str = nhtevent_json_from_c_nht(&c_nht);
 ```
@@ -856,6 +869,7 @@ Generates a C-compatible struct for FRR integration.
 |:---|:---|
 | Template naming | Derived from schema `title.lower()` — e.g., `"NhtEvent"` → base `"nhtevent"` |
 | Mode → filename | `header` → `{base}.h.j2`, `source` → `{base}.cpp.j2`, `json_bindings` → `{base}_json.h.j2`, `c_header` → `c_{base}.h.j2` |
+| C struct name | `build_c_root_struct()` derives the name as `"C_" + schema.get("title", "NextHopGroupFull")` — e.g., `"NhtEvent"` → `"C_NhtEvent"`. This replaces the previous hardcoded `"C_NextHopGroupFull"`. |
 | No explicit map | Convention-based discovery; adding a new schema only requires matching template filenames |
 
 Template context by mode:
@@ -890,6 +904,78 @@ fpm_nl_enqueue()
                                                        nexthop_addr,
                                                        prev_resolved_nhg_id)
 ```
+
+## Build Integration (`src/Makefile.am`)
+
+The following additions integrate NhtEvent into the existing sonic-fib build system:
+
+**New variable**:
+```makefile
+nhtevent_schema_file = $(top_srcdir)/schema/NhtEvent.json
+```
+
+**BUILT_SOURCES** — add 4 generated files:
+```makefile
+BUILT_SOURCES = ... \
+                src/nhtevent.h \
+                src/nhtevent.cpp \
+                src/nhtevent_json.h \
+                src/c_nhtevent.h
+```
+
+**Build rules** — one per generated file, each depending on its template + schema + render_script. Follow the same pattern as the existing `nexthopgroupfull` rules:
+
+| Target | Template | Mode |
+|:---|:---|:---|
+| `src/nhtevent.h` | `templates/nhtevent.h.j2` | `header` |
+| `src/nhtevent.cpp` | `templates/nhtevent.cpp.j2` | `source` |
+| `src/nhtevent_json.h` | `templates/nhtevent_json.h.j2` | `json_bindings` |
+| `src/c_nhtevent.h` | `templates/c_nhtevent.h.j2` | `c_header` |
+
+Each rule invokes: `$(PYTHON) $(render_script) $(nhtevent_schema_file) $(top_srcdir)/templates $@ <mode>`
+
+**CLEANFILES** — add the same 4 generated files.
+
+**EXTRA_DIST** — add all 4 templates and the schema:
+```makefile
+EXTRA_DIST = ... \
+    templates/nhtevent.h.j2 \
+    templates/nhtevent.cpp.j2 \
+    templates/nhtevent_json.h.j2 \
+    templates/c_nhtevent.h.j2 \
+    schema/NhtEvent.json
+```
+
+**Library sources** (`src_libnexthopgroup_la_SOURCES`) — add:
+```makefile
+    src/nhtevent.cpp              \
+    src/c-api/nhtevent_capi.cpp
+```
+
+**Installed headers** (`nexthopgroup_header_HEADERS`) — add:
+```makefile
+    src/nhtevent.h \
+    src/nhtevent_json.h \
+    src/c_nhtevent.h
+```
+
+**C-API installed headers** (`nexthopgroup_capi_header_HEADERS`) — add:
+```makefile
+    src/c-api/nhtevent_capi.h
+```
+
+## Template Reference Files
+
+Add expected-output reference files under `templates/references/` for each generated file. These contain the fully rendered output (with `NhtEvent` as the schema title) and serve as baselines for validating template rendering:
+
+| Reference File | Corresponds To |
+|:---|:---|
+| `templates/references/nhtevent.h` | `src/nhtevent.h` |
+| `templates/references/nhtevent.cpp` | `src/nhtevent.cpp` |
+| `templates/references/nhtevent_json.h` | `src/nhtevent_json.h` |
+| `templates/references/c_nhtevent.h` | `src/c_nhtevent.h` |
+
+Each reference file is the exact output that the corresponding template should produce when rendered with `schema/NhtEvent.json`. The content matches the template patterns described above with all Jinja2 variables resolved (e.g., `{{ root_struct_name }}` → `NhtEvent`, `{{ root_struct.fields }}` expanded to the 5 schema fields).
 
 # 6. FPMsyncd Modifications
 The input data for this NHT event is detailed in the preceding sections. Under the Phase 1 approach, FPMsyncd will invoke fib_nhg_trigger_node_quick_fixup() when current_resolved_nhg_id is zero, indicating that the tracked nexthop address cannot be resolved. Additional scenarios will be addressed in future updates.
@@ -2334,7 +2420,192 @@ Part 2 backwalk from 240 (using `walk_spec_sonic_nhg` / `prune_spec_sonic_nhg`):
 TODO
 
 ## 8.2 sonic-fib unit test
-Generated via LLM
+
+Unit tests for the NhtEvent serialization layer are in `tests/nhtevent_ut.cpp`. The goal is 80% line coverage of the changed set (`src/nhtevent.h`, `src/nhtevent_json.h`, `src/c_nhtevent.h`, `src/c-api/nhtevent_capi.cpp`).
+
+### Build Integration (`tests/Makefile.am`)
+
+Add `tests/nhtevent_ut.cpp` to `tests_tests_SOURCES`.
+
+### Test File: `tests/nhtevent_ut.cpp`
+
+**Includes**:
+```cpp
+#include <cstdio>
+#include <cstring>
+#include <cstdlib>
+#include <gtest/gtest.h>
+
+#include "src/nhtevent.h"
+#include "src/nhtevent_json.h"
+#include "src/c_nhtevent.h"
+#include "src/c-api/nhtevent_capi.h"
+```
+
+### Test Cases
+
+#### Suite: `NhtEvent_Json`
+
+**`to_json_basic`** — Serialize a `fib::NhtEvent` to `nlohmann::ordered_json` and verify all 5 fields:
+```cpp
+TEST(NhtEvent_Json, to_json_basic)
+{
+    fib::NhtEvent evt;
+    evt.rnh_prefix = "fc06::2/128";
+    evt.prev_resolved_prefix = "fc06::/64";
+    evt.prev_resolved_nhg_id = 237;
+    evt.curr_resolved_prefix = "";
+    evt.curr_resolved_nhg_id = 0;
+
+    nlohmann::ordered_json j;
+    fib::to_json(j, evt);
+
+    EXPECT_EQ(j["rnh_prefix"], "fc06::2/128");
+    EXPECT_EQ(j["prev_resolved_prefix"], "fc06::/64");
+    EXPECT_EQ(j["prev_resolved_nhg_id"], 237);
+    EXPECT_EQ(j["curr_resolved_prefix"], "");
+    EXPECT_EQ(j["curr_resolved_nhg_id"], 0);
+}
+```
+
+**`from_json_basic`** — Deserialize a JSON string to `fib::NhtEvent` and verify all fields:
+```cpp
+TEST(NhtEvent_Json, from_json_basic)
+{
+    std::string json_str = R"({
+        "rnh_prefix": "10.0.0.1/32",
+        "prev_resolved_prefix": "10.0.0.0/24",
+        "prev_resolved_nhg_id": 100,
+        "curr_resolved_prefix": "10.0.0.0/24",
+        "curr_resolved_nhg_id": 200
+    })";
+
+    auto j = nlohmann::ordered_json::parse(json_str);
+    fib::NhtEvent evt;
+    fib::from_json(j, evt);
+
+    EXPECT_EQ(evt.rnh_prefix, "10.0.0.1/32");
+    EXPECT_EQ(evt.prev_resolved_prefix, "10.0.0.0/24");
+    EXPECT_EQ(evt.prev_resolved_nhg_id, 100u);
+    EXPECT_EQ(evt.curr_resolved_prefix, "10.0.0.0/24");
+    EXPECT_EQ(evt.curr_resolved_nhg_id, 200u);
+}
+```
+
+**`roundtrip`** — Serialize then deserialize, verify all fields match the original:
+```cpp
+TEST(NhtEvent_Json, roundtrip)
+{
+    fib::NhtEvent original;
+    original.rnh_prefix = "2001:db8::1/128";
+    original.prev_resolved_prefix = "2001:db8::/48";
+    original.prev_resolved_nhg_id = 500;
+    original.curr_resolved_prefix = "";
+    original.curr_resolved_nhg_id = 0;
+
+    std::string json_str = fib::nhtevent_to_json_string(original);
+    fib::NhtEvent parsed = fib::nhtevent_from_json_string(json_str);
+
+    EXPECT_EQ(parsed.rnh_prefix, original.rnh_prefix);
+    EXPECT_EQ(parsed.prev_resolved_prefix, original.prev_resolved_prefix);
+    EXPECT_EQ(parsed.prev_resolved_nhg_id, original.prev_resolved_nhg_id);
+    EXPECT_EQ(parsed.curr_resolved_prefix, original.curr_resolved_prefix);
+    EXPECT_EQ(parsed.curr_resolved_nhg_id, original.curr_resolved_nhg_id);
+}
+```
+
+**`nexthop_unreachable_event`** — Phase 1 trigger scenario (curr_resolved_nhg_id == 0):
+```cpp
+TEST(NhtEvent_Json, nexthop_unreachable_event)
+{
+    fib::NhtEvent evt;
+    evt.rnh_prefix = "fc06::2/128";
+    evt.prev_resolved_prefix = "fc06::/64";
+    evt.prev_resolved_nhg_id = 237;
+    evt.curr_resolved_prefix = "0.0.0.0/0";
+    evt.curr_resolved_nhg_id = 0;
+
+    std::string json_str = fib::nhtevent_to_json_string(evt);
+    fib::NhtEvent parsed = fib::nhtevent_from_json_string(json_str);
+
+    EXPECT_EQ(parsed.curr_resolved_nhg_id, 0u);
+    EXPECT_EQ(parsed.prev_resolved_nhg_id, 237u);
+}
+```
+
+#### Suite: `NhtEvent_CAPI`
+
+**`basic_serialization`** — C API `nhtevent_json_from_c_nht()` produces valid JSON that round-trips correctly:
+```cpp
+TEST(NhtEvent_CAPI, basic_serialization)
+{
+    struct C_NhtEvent c_nht;
+    memset(&c_nht, 0, sizeof(c_nht));
+
+    strncpy(c_nht.rnh_prefix, "fc06::2/128", NHT_PREFIX_MAXLEN - 1);
+    strncpy(c_nht.prev_resolved_prefix, "fc06::/64", NHT_PREFIX_MAXLEN - 1);
+    c_nht.prev_resolved_nhg_id = 237;
+    strncpy(c_nht.curr_resolved_prefix, "", NHT_PREFIX_MAXLEN - 1);
+    c_nht.curr_resolved_nhg_id = 0;
+
+    char* json_str = nhtevent_json_from_c_nht(&c_nht);
+    ASSERT_NE(json_str, nullptr);
+
+    fib::NhtEvent parsed = fib::nhtevent_from_json_string(json_str);
+    EXPECT_EQ(parsed.rnh_prefix, "fc06::2/128");
+    EXPECT_EQ(parsed.prev_resolved_prefix, "fc06::/64");
+    EXPECT_EQ(parsed.prev_resolved_nhg_id, 237u);
+    EXPECT_EQ(parsed.curr_resolved_prefix, "");
+    EXPECT_EQ(parsed.curr_resolved_nhg_id, 0u);
+
+    free(json_str);
+}
+```
+
+**`null_input`** — NULL pointer returns NULL without crashing:
+```cpp
+TEST(NhtEvent_CAPI, null_input)
+{
+    char* json_str = nhtevent_json_from_c_nht(nullptr);
+    EXPECT_EQ(json_str, nullptr);
+}
+```
+
+**`ipv4_event`** — IPv4 prefix handling via C API:
+```cpp
+TEST(NhtEvent_CAPI, ipv4_event)
+{
+    struct C_NhtEvent c_nht;
+    memset(&c_nht, 0, sizeof(c_nht));
+
+    strncpy(c_nht.rnh_prefix, "10.0.0.1/32", NHT_PREFIX_MAXLEN - 1);
+    strncpy(c_nht.prev_resolved_prefix, "10.0.0.0/24", NHT_PREFIX_MAXLEN - 1);
+    c_nht.prev_resolved_nhg_id = 42;
+    strncpy(c_nht.curr_resolved_prefix, "10.0.0.0/24", NHT_PREFIX_MAXLEN - 1);
+    c_nht.curr_resolved_nhg_id = 99;
+
+    char* json_str = nhtevent_json_from_c_nht(&c_nht);
+    ASSERT_NE(json_str, nullptr);
+
+    fib::NhtEvent parsed = fib::nhtevent_from_json_string(json_str);
+    EXPECT_EQ(parsed.rnh_prefix, "10.0.0.1/32");
+    EXPECT_EQ(parsed.prev_resolved_nhg_id, 42u);
+    EXPECT_EQ(parsed.curr_resolved_nhg_id, 99u);
+
+    free(json_str);
+}
+```
+
+### Coverage Analysis
+
+| Source File | Lines Covered By |
+|:---|:---|
+| `src/nhtevent_json.h` (`to_json`, `from_json`, string helpers) | `to_json_basic`, `from_json_basic`, `roundtrip`, `nexthop_unreachable_event` |
+| `src/c_nhtevent.h` (struct definition, `NHT_PREFIX_MAXLEN`) | All `NhtEvent_CAPI` tests |
+| `src/c-api/nhtevent_capi.cpp` (NULL check, field copy, JSON call, malloc, error paths) | `basic_serialization`, `null_input`, `ipv4_event` |
+| `src/nhtevent.h` (struct default values) | All tests (struct instantiation) |
+
+The 7 tests cover: successful serialization (IPv4 + IPv6), deserialization, round-trip integrity, NULL input error path, and the Phase 1 trigger scenario. This achieves >80% line coverage of the changed set.
 
 ## 8.3 sonic-swss unit test
 The test cases are implemented via gtest in `tests/mock_tests/fpmsyncd/nhg_nht_ut.cpp`, using the `FpmSyncdNhtBackwalk` fixture class.
