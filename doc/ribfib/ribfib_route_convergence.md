@@ -459,6 +459,40 @@ The existing `copy_state()` call uses `zebra_nhe_copy(re->nhe, 0)`, which zeroes
 
 #### NHT Event Generation in `zebra_rnh_eval_nexthop_entry()`
 
+**Signature change**: Add a `bool route_entry_queued` parameter to the function:
+```c
+static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
+					 int force, struct route_node *nrn,
+					 struct rnh *rnh,
+					 struct route_node *prn,
+					 struct route_entry *re,
+					 bool route_entry_queued)
+```
+
+The caller `zebra_rnh_evaluate_entry()` passes the `route_entry_queued` value obtained from `zebra_rnh_resolve_nexthop_entry()`.
+
+#### Signature change for `zebra_rnh_resolve_nexthop_entry()`
+
+Add a `bool *route_entry_queued` output parameter to signal when resolution failed only because all candidate routes are queued (not truly unresolved):
+
+```c
+static struct route_entry *
+zebra_rnh_resolve_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
+				struct route_node *nrn, const struct rnh *rnh,
+				struct route_node **prn, bool *route_entry_queued)
+```
+
+**Why**: When SONiC runs with `--asic-offload=notify_on_offload`, a route can be SELECTED but still QUEUED (awaiting ASIC offload confirmation). In this window, `zebra_rnh_resolve_nexthop_entry()` returns NULL (no valid RE found), which looks like the nexthop became unresolved. Without this signal, the NHT event would tell FPM the nexthop is gone — triggering unnecessary PIC convergence and traffic loss for a transient state that will self-resolve once the ASIC offload notification arrives.
+
+**Implementation**:
+- Add two local flags: `bool saw_selected = false` and `bool saw_queued = false`
+- Initialize output: `if (route_entry_queued) *route_entry_queued = false`
+- When iterating route entries, set `saw_selected = true` when a RE passes the SELECTED/FIB_OVERRIDE check
+- When a selected RE is skipped due to `ROUTE_ENTRY_QUEUED`, set `saw_queued = true` and continue
+- At the end (no valid RE found): set `*route_entry_queued = true` if both `saw_selected && saw_queued`
+
+This allows `zebra_rnh_eval_nexthop_entry()` to suppress the NHT dplane event while still allowing the rest of the evaluation (client notifications, pseudowire processing) to proceed normally.
+
 Before any state mutation (before `copy_state()` is called), cache the previous state as primitive values:
 ```c
 uint32_t prev_nhg_id = (rnh->state && rnh->state->nhe)
@@ -514,11 +548,11 @@ Declared in `zebra/zebra_dplane.h`, implemented in `zebra/zebra_dplane.c`:
 
 | Function | Return Type |
 |:---|:---|
-| `dplane_ctx_get_nht_rnh_prefix(ctx)` | `const struct prefix *` |
-| `dplane_ctx_get_nht_prev_resolved_prefix(ctx)` | `const struct prefix *` |
-| `dplane_ctx_get_nht_prev_resolved_nhg_id(ctx)` | `uint32_t` |
-| `dplane_ctx_get_nht_curr_resolved_prefix(ctx)` | `const struct prefix *` |
-| `dplane_ctx_get_nht_curr_resolved_nhg_id(ctx)` | `uint32_t` |
+| `dplane_ctx_get_rnh_prefix(ctx)` | `const struct prefix *` |
+| `dplane_ctx_get_rnh_prev_resolved_prefix(ctx)` | `const struct prefix *` |
+| `dplane_ctx_get_rnh_prev_resolved_nhg_id(ctx)` | `uint32_t` |
+| `dplane_ctx_get_rnh_curr_resolved_prefix(ctx)` | `const struct prefix *` |
+| `dplane_ctx_get_rnh_curr_resolved_nhg_id(ctx)` | `uint32_t` |
 
 Each accessor calls `DPLANE_CTX_VALID(ctx)` and reads from `ctx->u.rnh_info`.
 
