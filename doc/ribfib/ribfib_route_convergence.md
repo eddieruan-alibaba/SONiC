@@ -16,6 +16,7 @@
     - [Event Generation Workflow](#event-generation-workflow)
       - [`copy_state()` Fix: Preserve NHE ID](#copy_state-fix-preserve-nhe-id)
       - [NHT Event Generation in `zebra_rnh_eval_nexthop_entry()`](#nht-event-generation-in-zebra_rnh_eval_nexthop_entry)
+      - [Signature change for `zebra_rnh_resolve_nexthop_entry()`](#signature-change-for-zebra_rnh_resolve_nexthop_entry)
       - [`dplane_nht_event_update()` Function](#dplane_nht_event_update-function)
       - [Accessor Functions](#accessor-functions)
       - [Boilerplate Switch Cases](#boilerplate-switch-cases)
@@ -44,10 +45,14 @@
     - [Template: `c_nhtevent.h.j2` (mode: `c_header`)](#template-c_nhteventhj2-mode-c_header)
     - [`render_schema.py` Template Selection](#render_schemapy-template-selection)
   - [Data Flow](#data-flow)
+  - [Build Integration (`src/Makefile.am`)](#build-integration-srcmakefileam)
+  - [Template Reference Files](#template-reference-files)
 - [6. FPMsyncd Modifications](#6-fpmsyncd-modifications)
   - [Existing NHG MGR codes](#existing-nhg-mgr-codes)
   - [NHT Event Message Reception (`onNhtEventMsg`)](#nht-event-message-reception-onnhteventmsg)
-    - [Message Dispatch in `onMsgRaw()`](#message-dispatch-in-onmsgraw)
+    - [FPM Link Layer: `fpmlink.h` / `fpmlink.cpp`](#fpm-link-layer-fpmlinkh--fpmlinkcpp)
+    - [`onMsgRaw()` Whitelist Guard](#onmsgraw-whitelist-guard)
+    - [Message Length Calculation and Dispatch in `onMsgRaw()`](#message-length-calculation-and-dispatch-in-onmsgraw)
     - [`RouteSync::onNhtEventMsg()`](#routesynconnhteventmsg)
   - [`fib_nhg_trigger_node_quick_fixup()`](#fib_nhg_trigger_node_quick_fixup)
     - [Part 1: Global Table Context Backwalk](#part-1-global-table-context-backwalk)
@@ -65,6 +70,11 @@
       - [`RIBNHGEntry::regenerateFields()`](#ribnhgentryregeneratefields)
       - [`RIBNHGEntry::addDependentsMember()` / `removeDependentsMember()`](#ribnhgentryadddependentsmember--removedependentsmember)
       - [`RIBNHGTable::addNHGDependents()` / `removeNHGDependents()`](#ribnhgtableaddnhgdependents--removenhgdependents)
+    - [Method Update: `RIBNHGEntry::checkNeedUpdate()`](#method-update-ribnhgentrycheckneedupdate)
+    - [Method Update: `NHGMgr::updateExistingNHGFull()`](#method-update-nhgmgrupdateexistingnhgfull)
+    - [Method Update: `NHGMgr::addNewNHGFull()` — Index Map Population](#method-update-nhgmgraddnewnhgfull--index-map-population)
+    - [Method Update: `NHGMgr::delNHGFull()` — Index Map Cleanup](#method-update-nhgmgrdelnhgfull--index-map-cleanup)
+    - [`backwalk` Parameter Threading](#backwalk-parameter-threading)
     - [Method Update: `RIBNHGEntry::getNextHopGroupFields()`](#method-update-ribnhgentrygetnexthopgroupfields)
       - [New Helper: `resolveLeafEnableFlags()`](#new-helper-resolveleafenableflags)
       - [Updated `getNextHopGroupFields()` Usage](#updated-getnexthopgroupfields-usage)
@@ -98,12 +108,21 @@
 - [8. Test cases](#8-test-cases)
   - [8.1 FRR topotest](#81-frr-topotest)
   - [8.2 sonic-fib unit test](#82-sonic-fib-unit-test)
+    - [Build Integration (`tests/Makefile.am`)](#build-integration-testsmakefileam)
+    - [Test File: `tests/nhtevent_ut.cpp`](#test-file-testsnhtevent_utcpp)
+    - [Test Cases](#test-cases)
+      - [Suite: `NhtEvent_Json`](#suite-nhtevent_json)
+      - [Suite: `NhtEvent_CAPI`](#suite-nhtevent_capi)
+    - [Coverage Analysis](#coverage-analysis)
   - [8.3 sonic-swss unit test](#83-sonic-swss-unit-test)
     - [Test Fixture: `FpmSyncdNhtBackwalk`](#test-fixture-fpmsyncdnhtbackwalk)
-    - [Test Cases](#test-cases)
+    - [Test Cases](#test-cases-1)
       - [Backwalk Tests (using `runPart1Backwalk` / `runPart2Backwalk`)](#backwalk-tests-using-runpart1backwalk--runpart2backwalk)
       - [General Tests (using `fib_nhg_trigger_node_quick_fixup`)](#general-tests-using-fib_nhg_trigger_node_quick_fixup)
       - [`resolveLeafEnableFlags()` Tests](#resolveleafenableflags-tests)
+      - [Function-Level Unit Tests](#function-level-unit-tests)
+    - [Build Integration](#build-integration)
+    - [Topology JSON Files](#topology-json-files)
     - [Main Test Flow](#main-test-flow)
   - [8.4 sonic-mgmt system level tests](#84-sonic-mgmt-system-level-tests)
     - [8.4.1 7-Node Topology Key Connections](#841-7-node-topology-key-connections)
@@ -146,23 +165,25 @@
 
 
 # 1. Problem Statements
-In the current SONiC architecture, orchagent mitigates traffic loss during local port-down events by rapidly removing failed load-balancing members. However, in other failure scenarios, FRR generates a new Next Hop Group (NHG) and migrates dependent prefixes sequentially, causing the traffic loss window to scale linearly with the number of affected prefixes.
+In the current SONiC architecture, `orchagent` mitigates traffic loss during local port-down events by rapidly removing failed load-balancing members. However, in broader failure scenarios, FRR generates a replacement Next Hop Group (NHG) and sequentially migrates dependent prefixes. This approach causes the traffic loss window to scale linearly with the number of affected prefixes, resulting in suboptimal convergence latency.To eliminate this prefix-dependent convergence delay, we propose a Prefix-Independent Convergence (PIC) mechanism. The detail of PIC and RIB/FIB archtitecture could be found in corresponding HLDs. This document focuses on how to implement route convergence in RIB/FIB architecture to support PIC. 
 
-To eliminate this prefix-dependent convergence delay, we propose a Prefix-Independent Convergence (PIC) mechanism. When fpmsyncd receives a Next Hop Tracking (NHT) update from zebra, it triggers a targeted reconciliation process. By performing a dependency backwalk from the invalidated NHG, the system identifies all reliant NHGs and applies coordinated updates, bypassing sequential prefix migration. The primary objective is to immediately prune failed forwarding paths to minimize the traffic loss window, allowing the control plane to subsequently recalculate and install optimal routes in the background.
+When fpmsyncd receives a Next Hop Tracking (NHT) update from zebra, it initiates a targeted reconciliation process. By performing a dependency backwalk from the invalidated NHG, the system identifies all downstream NHGs and applies coordinated state updates. The primary objective is to immediately prune failed forwarding paths, minimizing the traffic loss window while the control plane asynchronously recalculates and installs optimal routes in the background.
 
-The implementation comprises Four core components:
-
-* **FRR Modification**: Route all NHT events to the FPM interface exclusively through the dplane subsystem.
-* **SONiC FPM modifications**: convert NHT events to fpm message.
-* **sonic-fib Enhancement**: Introduce a new data schema to map NHT events, capturing both the affected next hop and its corresponding NHG identifier.
-* **fpmsyncd Logic**:  Traverse all dependent NHGs and rapidly reconcile the affected forwarding state.
+The implementation comprises five core components:
+* **FRR Modification**: Route all NHT events to the FPM interface exclusively through the dplane subsystem. The code changes are in FRR
+* **SONiC FPM Adaptation**: Translate NHT events into standardized FPM messages. The code changes are in sonic-buildimage's sonic fpm. 
+* **sonic-fib Enhancement**: Introduce a new data schema to map NHT events, capturing both the impacted next hop and its corresponding NHG identifier. The code changes are in sonic-buildimage's sonic fib lib.
+* **fpmsyncd Logic**: Traverse all dependent NHGs and rapidly reconcile the affected forwarding state. The code changes are in sonic-swss.
+* **7-Node System Verification**: Validate route convergence correctness through comprehensive end-to-end testing on a seven-node topology. The code changes are in sonic-mgmt.
 
 
 # 2. General Code Generation Rules
-This Low-Level Design (LLD) is deliberately authored with implementation-grade specificity to function as a high-fidelity prompt for LLM-powered code generation tools (e.g., Qoder CLI: https://qoder.com/en/cli). The goal is to enable reliable, specification-to-code automation with minimal ambiguity.
+This Low-Level Design (LLD) is deliberately authored with implementation-grade specificity to function as a high-fidelity prompt for LLM-powered code generation tools (e.g., Qoder CLI: https://qoder.com/en/cli, Claude CLI: https://code.claude.com/docs/en/cli-reference). The goal is to enable reliable, specification-to-code automation with minimal ambiguity.
+
+The following are couple general coding rules to guide LLM to generate codes. 
 
 ## 1. Language Standard
-  * C++14 is the required baseline for all SONiC C++ components (sonic-swss, sonic-fib, swss-common, etc.).
+  * C++14 is the required baseline for all SONiC C++ components (sonic-swss, sonic-fib, etc.).
   * Do not use C++17/20 features unless the target branch explicitly migrates.
 ## 2. Header Include Paths: Export vs. Internal Files
 When generating code for Debian-packaged components, distinguish between public export headers and internal implementation files:'**
