@@ -110,18 +110,24 @@
     - [8.4.2 Helper Functions](#842-helper-functions)
       - [1. apply\_config\_cmmds\_to\_vtysh(nbrhost, cmd\_list)](#1-apply_config_cmmds_to_vtyshnbrhost-cmd_list)
       - [2. collect\_db\_entries(duthost, testcase\_name, db\_name, collecting\_prefix)](#2-collect_db_entriesduthost-testcase_name-db_name-collecting_prefix)
-      - [3 Record Collection](#3-record-collection)
-      - [4. APPDB Assertion Helpers](#4-appdb-assertion-helpers)
-        - [assert\_appdb\_nexthop\_removed](#assert_appdb_nexthop_removed)
-        - [assert\_appdb\_nexthop\_present](#assert_appdb_nexthop_present)
-      - [5. verify\_nhg\_before\_routes(duthost, testcase\_name, trigger\_nexthop)](#5-verify_nhg_before_routesduthost-testcase_name-trigger_nexthop)
-      - [6. verify\_no\_nhg\_update(duthost, testcase\_name)](#6-verify_no_nhg_updateduthost-testcase_name)
-      - [7. get\_dut\_timestamp(duthost)](#7-get_dut_timestampduthost)
-      - [8. \_parse\_rec\_timestamp(line):](#8-_parse_rec_timestampline)
+      - [3. collect\_vtysh\_route\_snapshot(duthost, snapshot\_name)](#3-collect_vtysh_route_snapshotduthost-snapshot_name)
+      - [4. Record Collection](#4-record-collection)
+        - [`start_record_collection(duthost, testcase_name)`](#start_record_collectionduthost-testcase_name)
+        - [`stop_record_collection(duthost, testcase_name)`](#stop_record_collectionduthost-testcase_name)
+      - [5. APPDB Assertion Helpers](#5-appdb-assertion-helpers)
+        - [`assert_appdb_nexthop_removed(duthost, nexthop, timeout=10, poll_interval=1)`](#assert_appdb_nexthop_removedduthost-nexthop-timeout10-poll_interval1)
+        - [`assert_appdb_nexthop_present(duthost, nexthop)`](#assert_appdb_nexthop_presentduthost-nexthop)
+      - [6. `_extract_sonic_nhg_id_from_rec_line(line)`](#6-_extract_sonic_nhg_id_from_rec_lineline)
+      - [7. `_is_skipable_nhg(duthost, sonic_nhg_id)`](#7-_is_skipable_nhgduthost-sonic_nhg_id)
+      - [8. `verify_nhg_before_routes(duthost, testcase_name, trigger_nexthop, trigger_ts=None)`](#8-verify_nhg_before_routesduthost-testcase_name-trigger_nexthop-trigger_tsnone)
+      - [9. `verify_no_nhg_update(duthost, testcase_name, trigger_ts=None)`](#9-verify_no_nhg_updateduthost-testcase_name-trigger_tsnone)
+      - [10. `get_dut_timestamp(duthost)`](#10-get_dut_timestampduthost)
+      - [11. `_parse_rec_timestamp(line)`](#11-_parse_rec_timestampline)
     - [8.4.3 Failure Triggers](#843-failure-triggers)
     - [8.4.4 Test Cases](#844-test-cases)
-      - [Topology 1 Static Routes (applied on PE3)](#topology-1-static-routes-applied-on-pe3)
-      - [Topology 2 Static Routes (applied on PE3)](#topology-2-static-routes-applied-on-pe3)
+      - [Module-Level Constants](#module-level-constants)
+      - [Common Test Pattern](#common-test-pattern)
+      - [Function Signatures](#function-signatures)
       - [`test_topology1_local_failure`](#test_topology1_local_failure)
       - [`test_topology1_remote_bgp_failure`](#test_topology1_remote_bgp_failure)
       - [`test_topology1_remote_igp_failure`](#test_topology1_remote_igp_failure)
@@ -2358,7 +2364,7 @@ Two test patterns are used:
 3. Assert `m_resolved_enable_group` state and/or `resolveLeafEnableFlags()` output on affected entries
 
 ## 8.4 sonic-mgmt system level tests
-Within the current sonic-mgmt framework, system-level SRv6 validation is anchored by [tests/srv6/test_srv6_basic_sanity.py](https://github.com/sonic-net/sonic-mgmt/blob/master/tests/srv6/test_srv6_basic_sanity.py), which implements a baseline 7-node topology. The three topologies discussed previously are derived from this reference setup. All new test additions are integrated directly into this file, with supporting utilities centralized in `srv6_utils.py` to promote maintainability and reuse.
+Within the current sonic-mgmt framework, system-level SRv6 validation is anchored by [tests/srv6/test_srv6_basic_sanity.py](https://github.com/sonic-net/sonic-mgmt/blob/master/tests/srv6/test_srv6_basic_sanity.py), which implements a baseline 7-node topology. The three topologies discussed previously are derived from this reference setup. All new test additions are integrated directly into this file, with supporting utilities centralized in `srv6_utils.py` to promote maintainability and reusability.
 
 ### 8.4.1 7-Node Topology Key Connections
 
@@ -2381,32 +2387,42 @@ Within the current sonic-mgmt framework, system-level SRv6 validation is anchore
 Both prefixes have 2-path ECMP at PE3: via fc06::2 (Ethernet12→P4) and fc08::2 (Ethernet4→P2).
 
 ### 8.4.2 Helper Functions
-
-All helper functions are added to `tests/srv6/srv6_utils.py`. The main design rules for these helper functions are
-
-* Try to create local python script which could run multiple commands on the device instead of using multiple RPCs, one for each commands.
-* For vtysh configuration, we could use `-c` option to group multiple configuration commands together. 
+All helper functions are centralized in `tests/srv6/srv6_utils.py` and adhere to the following design guidelines:
+* Minimize RPC overhead: Prefer executing multiple device commands through a single local Python script rather than issuing individual RPC calls for each command.
+* Batch vtysh configurations: Use the -c flag to pass multiple configuration commands to vtysh in a single invocation.
 
 #### 1. apply_config_cmmds_to_vtysh(nbrhost, cmd_list)
-Apply a list of vtysh configuration commands to the given device. 
+Apply a list of vtysh configuration commands to the given device in a single SSH round-trip.
+
+Builds one `vtysh` invocation with `'configure terminal'` followed by each command as a `-c` argument. Returns immediately if `cmd_list` is empty.
 
 Inputs:
 * nbrhost: the device which would apply a list of commands.
 * cmd_list: a list of commands.
 
+```python
+def apply_config_cmmds_to_vtysh(nbrhost, cmd_list):
+    if not cmd_list:
+        return
+    args = "-c 'configure terminal'"
+    for input_cmd in cmd_list:
+        args += " -c '{}'".format(input_cmd)
+    nbrhost.command("vtysh {}".format(args))
+```
+
 
 #### 2. collect_db_entries(duthost, testcase_name, db_name, collecting_prefix)
-A util function to collect a given dadabase's entries into a json file.
+A util function to collect a given database's entries into a JSON file on the DUT.
 
 Inputs:
 * duthost: the device to run to collect redis db entries. 
 * testcase_name: test case name
-* db_name: data base name, used to find out redis db port and instance
-* collecting_prefix: the collecting entries's prefix.
+* db_name: database name, used to find out redis db port and instance
+* collecting_prefix: the collecting entries' prefix (e.g., `"NEXTHOP_GROUP_TABLE"`).
 
-First, we use db_name to find out redis db port and instance. Initially, we only support two db instances with hardcoded value approach. 
+First, we use db_name to find out redis db port and instance. In current phrase, we only support two db instances with hardcoded value approach. 
 
-```
+```python
     # 1. Determine Redis credentials
     if db_name == "appdb":
         db_num, port = 0, 6378
@@ -2417,15 +2433,17 @@ First, we use db_name to find out redis db port and instance. Initially, we only
         return
 ```
 
-Then we need to create a python script which would get a list of entries keys from redis db and read each keys' value one byt one. This python script would be saved to the dut device. The output file name is in the following format
+Then create a bash script wrapping a `python3` invocation that uses the `redis` library to:
+1. Connect to Redis with the determined port/db_num using `decode_responses=True`
+2. Get all keys matching `{collecting_prefix}:*` via `r.keys()`
+3. For each key, read the full hash via `r.hgetall(k)`
+4. Write the result as JSON (with `indent=2`) to the output file
 
-```
-  <testcase_name>_<collecting_prefix>.json
-```
+The output file path is: `{test_log_dir}/{testcase_name}_{collecting_prefix}.json`
 
-The following is an sample of how to copy over this python script to the device. 
+Deploy the script to the device via base64 encoding (bypasses Jinja2 templating issues with special characters):
 
-```
+```python
     script_b64 = base64.b64encode(script_content.encode('utf-8')).decode('ascii')
 
     script_path = "/tmp/collect_redis.sh"
@@ -2434,132 +2452,214 @@ The following is an sample of how to copy over this python script to the device.
     # Write script using base64 (bypasses Jinja2)
     duthost.shell(f"echo '{script_b64}' | base64 -d > {script_path}")
     duthost.command(f"chmod +x {script_path}")
+
+    # Run with the determined Redis credentials
+    duthost.command(f"{script_path} {db_num} {port} '{collecting_prefix}' {out_path}")
 ```
 
 
-#### 3 Record Collection
-There are two set of collection functions
-1. start_record_collection(duthost, testcase_name)
-Capture a 'before' snapshot, then start tailing swss.rec/sairedis.rec/syslog on DUT
-2. stop_record_collection(duthost, testcase_name)
-Stop tailing swss.rec/sairedis.rec/syslog on DUT, then capture a 'after' snapshot
+#### 3. collect_vtysh_route_snapshot(duthost, snapshot_name)
+Run vtysh route/nexthop show commands and save output to a single file in one RPC call.
 
-The following information would be taken in the snapshot. 
-* NEXTHOP_GROUP_TABLE* entries from appdb via collect_db_entries()
-* NHG_FULL_STATE_TABLE* entries from appstatedb via collect_db_entries()
-* Run the following vtysh commands on device and save them into a file on the device. For each command, we want the script to echo this command into the output file first, then save the output into the output file. That would make this final output file each to read. 
-  * "show ipv6 route nexthop"
-  * "show ip route vrf Vrf1 nexthop"
-  * "show ip route vrf Vrf1 192.100.0.1 nexthop"
-  * "show next rib"
+Each command's output is preceded by a header line (`=== <command> ===`) for readability. All commands are combined into a single shell invocation using `&&` to minimize SSH round-trips.
 
-The naming convention is <testcase name>_<collect location>_<content name>.txt
+Inputs:
+* duthost: DUT host object
+* snapshot_name: name prefix for the output file
 
-* testcase name : given from test case. 
-* collect_location :
-  * "before" triggered in start_record_collection
-  * "after" triggered in stop_record_collection
-* Contents collecting methods
-  * Files in /var/log or /var/log/swss, 
-    via "tail -f" to trace, for example
+Output file: `{test_log_dir}/{snapshot_name}_snapshot.txt`
+
+Commands captured:
+* `show ipv6 route nexthop`
+* `show ip route vrf Vrf1 nexthop`
+* `show ip route vrf Vrf1 192.100.0.1 nexthop`
+* `show next rib`
+
+Implementation: Build a shell command string where the first command uses `>` (overwrite) and subsequent commands use `>>` (append). Each command is preceded by an `echo '=== <cmd> ==='` line. Execute the combined command with `duthost.shell(cmd, module_ignore_errors=True)`.
+
+#### 4. Record Collection
+There are two collection functions that work as a pair:
+
+##### `start_record_collection(duthost, testcase_name)`
+Capture a "before" snapshot, then start tailing swss.rec/sairedis.rec/syslog on DUT.
+
+**Execution order is critical**: Snapshot collection MUST complete before starting tail processes, so tails only capture events triggered by the subsequent test action (not by the snapshot commands themselves).
+
+Steps:
+1. `duthost.command("mkdir -p {}".format(test_log_dir))` — ensure log directory exists
+2. Collect "before" snapshot:
+   * `collect_db_entries(duthost, "{testcase_name}_before", "appdb", "NEXTHOP_GROUP_TABLE")`
+   * `collect_db_entries(duthost, "{testcase_name}_before", "appstatedb", "NHG_FULL_STATE_TABLE")`
+   * `collect_vtysh_route_snapshot(duthost, "{testcase_name}_before")`
+3. Start background tails using `setsid` (properly daemonizes the process, unlike `nohup` which may not survive SSH session drops):
+   * For swss.rec and sairedis.rec (source: `/var/log/swss/`):
+     ```
+     duthost.command(
+         "setsid sh -c 'tail -f /var/log/swss/{rec} > {outfile} 2>&1 &' </dev/null >/dev/null 2>&1")
+     ```
+     Output file: `{test_log_dir}/{prefix}_{testcase_name}.rec` where `prefix` = filename without `.rec` (e.g., `swss`, `sairedis`)
+   * For syslog (source: `/var/log/syslog`):
+     ```
+     duthost.command(
+         "setsid sh -c 'tail -f /var/log/syslog > {outfile} 2>&1 &' </dev/null >/dev/null 2>&1")
+     ```
+     Output file: `{test_log_dir}/syslog_{testcase_name}`
+
+##### `stop_record_collection(duthost, testcase_name)`
+Stop tailing and capture an "after" snapshot.
+
+Steps:
+1. Kill tail processes:
+   * `duthost.command("pkill -f 'tail -f /var/log/swss'")`
+   * `duthost.command("pkill -f 'tail -f /var/log/'")`
+2. Collect "after" snapshot (same as "before" but with `"{testcase_name}_after"` prefix):
+   * `collect_db_entries(duthost, "{testcase_name}_after", "appdb", "NEXTHOP_GROUP_TABLE")`
+   * `collect_db_entries(duthost, "{testcase_name}_after", "appstatedb", "NHG_FULL_STATE_TABLE")`
+   * `collect_vtysh_route_snapshot(duthost, "{testcase_name}_after")`
+
+#### 5. APPDB Assertion Helpers
+
+##### `assert_appdb_nexthop_removed(duthost, nexthop, timeout=10, poll_interval=1)`
+
+Poll APPDB until the given nexthop string is absent from ALL NHG entries' `nexthop` field, or fail after timeout.
+
+**Signature**: `assert_appdb_nexthop_removed(duthost, nexthop, timeout=10, poll_interval=1)`
+
+**Polling mechanism**:
+```python
+deadline = time.time() + timeout
+while time.time() < deadline:
+    # single RPC: run check script on DUT
+    # if output == "not_found": return (success)
+    # if output startswith "found:": record last_found_key
+    time.sleep(poll_interval)
+pytest_assert(False, "Nexthop '{}' still present in APPDB after {}s".format(nexthop, timeout))
 ```
-        duthost.command(
-            "nohup tail -f /var/log/swss/{} > {} 2>&1 &".format(rec, outfile))
-```
-    via "pkill " to stop tracing
-```
-        duthost.command("pkill -f 'tail -f /var/log/swss'")
-```
-  * redis DB content collecting, via collect_db_entries() which would put a python script to collect redis contents at the device and save it to a file. 
-  * Batch vtysh commands would and save the log into a file.
-`
 
-#### 4. APPDB Assertion Helpers
-##### assert_appdb_nexthop_removed
-This function would poll all APPDB's NEXTHOP_GROUP_TABLE* entries and check each entry's nexthop field has provided pathern and assert if we have the given pattern in the nexthop field. We will skip report failure for the following cases.
+**On-DUT script**: A self-contained python3 script deployed via base64. It connects to:
+* appdb: `redis.Redis(host='127.0.0.1', port=6378, db=0, decode_responses=True)`
+* appstatedb: `redis.Redis(host='127.0.0.1', port=6379, db=14, decode_responses=False)`
 
-    1. Gateway NHGs for the given nexthop (gate field matches), or
-    2. SRv6 NHGs (any recursive depends has non-null nh_srv6), or
-    3. NHGs pending deletion in zebra (show nexthop rib has "Time to Deletion").
+The script iterates `NEXTHOP_GROUP_TABLE:*` keys, checks if `nexthop` appears in the `nexthop` hash field. For each match, it applies skip logic before reporting. Output protocol: prints `"found:<key>"` if nexthop is still present in a non-skipped NHG, or `"not_found"` if absent from all relevant NHGs.
 
-To avoid too many RPC calls, we create a python help and put it to the device, then run this python script. 
+**Skip logic** (`should_skip` function in the on-DUT script):
 
-##### assert_appdb_nexthop_present
-Similar to above one, except we check if the given pattern is presented.
+| Skip Case | How to Check |
+|:----------|:-------------|
+| 1. Gateway NHG | Find the RIB ID for this sonic NHG ID (scan `NHG_FULL_STATE_TABLE:*` keys, compare `sonic_nhg_id` field). Parse the JSON field. If `nhg_data["gate"] == nexthop`, skip. |
+| 2. SRv6 NHG | Recursively check: parse JSON from `NHG_FULL_STATE_TABLE:{rib_id}`. If `nh_srv6` is non-null, skip. Otherwise, read `depends` field (JSON list of IDs), recurse into each dep's `NHG_FULL_STATE_TABLE:{dep_id}` entry. Use a visited set to avoid cycles. |
+| 3. Pending deletion | Run `subprocess.check_output(['vtysh', '-c', 'show nexthop rib {rib_id}'])` and check if output contains `"Time to Deletion"`. |
+
+**RIB ID lookup** (`find_rib_id_by_sonic_nhg_id`): Scan all `NHG_FULL_STATE_TABLE:*` keys, for each key read the `sonic_nhg_id` hash field, compare with the target. Return the key suffix (the RIB ID portion) on match.
+
+##### `assert_appdb_nexthop_present(duthost, nexthop)`
+
+Assert the given nexthop exists in at least one NHG entry's `nexthop` field. Single RPC call (no polling needed — presence is immediate to verify).
+
+Deploys a simpler python3 script (no skip logic) that iterates `NEXTHOP_GROUP_TABLE:*` keys and checks if `nexthop` appears in the `nexthop` hash field. Output protocol: `"found:<key>"` or `"not_found"`. Fails with `pytest_assert` if not found.
 
 
-#### 5. verify_nhg_before_routes(duthost, testcase_name, trigger_nexthop)
-Assert all NEXTHOP_GROUP_TABLE updates happen before ROUTE_TABLE after trigger.
+#### 6. `_extract_sonic_nhg_id_from_rec_line(line)`
 
-    After the NEIGH_TABLE DEL line for trigger_nexthop, verifies that no
-    ROUTE_TABLE entry appears before all NEXTHOP_GROUP_TABLE entries have
-    been written. This confirms PIC fast-path pushes NHG updates before
-    RIB reconvergence route updates.
-
-    NEXTHOP_GROUP_TABLE updates caused by zebra convergence (where the NHG's
-    RIB ID has SRv6 info in its depends) are excluded from violation checks.
-
-    ROUTE_TABLE entries with "protocol:kernel" (e.g. loopback routes) are
-    skipped since they are not part of the BGP/zebra reconvergence ordering.
-
-    Args:
-        duthost: DUT host object
-        testcase_name: test case name (matches swss_{name}.rec)
-        trigger_nexthop: the nexthop address whose NEIGH_TABLE DEL is the trigger
-        trigger_ts: datetime of the exceptional trigger; lines before this
-                    timestamp are ignored. Capture with get_dut_timestamp()
-                    immediately before firing the trigger. Optional — if None,
-                    all lines are checked.
+Extract the sonic NHG ID from a swss rec file line using regex.
 
 ```python
-def _is_skipable_nhg(duthost, sonic_nhg_id):
-    """Returns True if the NHG should be excluded from PIC ordering violation checks.
+def _extract_sonic_nhg_id_from_rec_line(line):
+    match = re.search(r'NEXTHOP_GROUP_TABLE:(\d+)', line)
+    if match:
+        return match.group(1)
+    return None
+```
 
-    Skips when the NHG's RIB entry has SRv6 depends (zebra convergence)
-    or the RIB ID is pending deletion.
-    """
+#### 7. `_is_skipable_nhg(duthost, sonic_nhg_id)`
 
+Returns True if the NHG should be excluded from PIC ordering violation checks. Used by both `verify_nhg_before_routes` and `verify_no_nhg_update`.
 
-def verify_nhg_before_routes(duthost, testcase_name, trigger_nexthop):
+Skips when:
+* The NHG's RIB entry has SRv6 info in its depends (zebra convergence update, not PIC), or
+* The RIB ID is pending deletion in zebra.
+
+**Implementation**: Deploys a python3 script to the DUT via base64 that:
+1. Finds the RIB ID from `sonic_nhg_id` by scanning `NHG_FULL_STATE_TABLE:*` (same lookup as `assert_appdb_nexthop_removed`)
+2. If no RIB ID found, prints `"no_rib_id"` (not skipped)
+3. Checks `any_nh_srv6_present` recursively through depends (same logic as assertion helper)
+4. Checks `has_time_to_deletion` via `vtysh -c 'show nexthop rib {rib_id}'`
+5. Prints `"skip"` or `"not_skip"`
+
+Returns `output == 'skip'` in the Python caller.
+
+#### 8. `verify_nhg_before_routes(duthost, testcase_name, trigger_nexthop, trigger_ts=None)`
+
+Assert all NEXTHOP_GROUP_TABLE updates happen before ROUTE_TABLE updates after the trigger event. This confirms PIC fast-path pushes NHG updates before RIB reconvergence route updates.
+
+**Args**:
+* duthost: DUT host object
+* testcase_name: test case name
+* trigger_nexthop: the nexthop address whose NEIGH_TABLE DEL is the trigger
+* trigger_ts: datetime captured with `get_dut_timestamp()` immediately before firing the trigger. Optional — if None, all lines are checked.
+
+**Rec file path**: `{test_log_dir}/swss_{testcase_name}.rec`
+
+**Algorithm**:
+1. Read the rec file from DUT via `duthost.command("cat {rec_file}")`
+2. **Timestamp filtering**: If `trigger_ts` is provided, filter lines to only those within a 3-second window `[trigger_ts, trigger_ts + 3s]` using `_parse_rec_timestamp()`. Lines outside this window are not part of the PIC convergence event.
+3. **Find trigger line**: Scan for a line containing both `"NEIGH_TABLE:"` and `":{trigger_nexthop}|DEL"`. Fail with `pytest_assert` if not found.
+4. **Check ordering** after the trigger line:
+   * Track `saw_route` flag (set to True on first `ROUTE_TABLE:` line)
+   * Skip `ROUTE_TABLE` lines containing `"protocol:kernel"` (loopback routes, not part of reconvergence)
+   * After `saw_route` is True, if a `NEXTHOP_GROUP_TABLE:` line appears:
+     * **Skip** if the line does NOT contain `trigger_nexthop` (these are unrelated NHG updates from zebra recursive resolution)
+     * **Skip** if `_is_skipable_nhg(duthost, sonic_nhg_id)` returns True (SRv6 depends or pending deletion)
+     * Otherwise → **ordering violation**: fail with `pytest_assert`
+
+```python
+def verify_nhg_before_routes(duthost, testcase_name, trigger_nexthop, trigger_ts=None):
     """Assert all NEXTHOP_GROUP_TABLE updates happen before ROUTE_TABLE after trigger."""
 ```
 
-#### 6. verify_no_nhg_update(duthost, testcase_name)
+#### 9. `verify_no_nhg_update(duthost, testcase_name, trigger_ts=None)`
+
 Assert no unexpected NEXTHOP_GROUP_TABLE SET operation in the swss record file.
 
-    Used in BGP remote failure tests where route withdrawal should result in
-    only ROUTE_TABLE updates (2 paths to 1 path), with no NHG changes pushed
-    to hardware.
+Used in BGP remote failure tests where route withdrawal should result in only ROUTE_TABLE updates (2 paths to 1 path), with no NHG changes pushed to hardware.
 
-    A NEXTHOP_GROUP_TABLE entry is NOT flagged as a violation when:
-      - its timestamp is before trigger_ts (pre-trigger state, not caused by
-        the test action)
-      - it is a DEL (deletion) rather than a SET
-      - the NHG's RIB entry has SRv6 info in its depends (legitimate zebra
-        convergence update), or its RIB ID is pending deletion. This is the
-        same skip logic used by _is_skipable_nhg().
+**Args**:
+* duthost: DUT host object
+* testcase_name: test case name
+* trigger_ts: datetime captured with `get_dut_timestamp()`. Optional — if None, all lines are checked.
 
-    Args:
-        duthost: DUT host object
-        testcase_name: test case name (matches swss_{name}.rec)
-        trigger_ts: datetime of the exceptional trigger; lines before this
-                    timestamp are ignored. Capture with get_dut_timestamp()
-                    immediately before firing the trigger. Optional — if None,
-                    all lines are checked.
+**Rec file path**: `{test_log_dir}/swss_{testcase_name}.rec`
 
-#### 7. get_dut_timestamp(duthost)
-eturn the current DUT time as a datetime object (one RPC call).
+**Algorithm**:
+1. Read the rec file from DUT
+2. For each line containing `"NEXTHOP_GROUP_TABLE:"`:
+   * **Skip** if timestamp is outside the 3-second window `[trigger_ts, trigger_ts + 3s]` (not caused by the test action)
+   * **Skip** if line does NOT contain `"|SET|"` (DEL operations don't push NHG changes to hardware)
+   * **Skip** if `_is_skipable_nhg(duthost, sonic_nhg_id)` returns True (SRv6 depends or pending deletion)
+   * Otherwise → **violation**: fail with `pytest_assert`
 
-    Uses the same microsecond precision as swss rec file timestamps so the
-    returned value can be compared directly against parsed rec line timestamps.
+A NEXTHOP_GROUP_TABLE entry is NOT flagged as a violation when:
+  - its timestamp is outside the `[trigger_ts, trigger_ts + 3s]` window (not caused by the test action)
+  - it is a DEL (deletion) rather than a SET
+  - the NHG's RIB entry has SRv6 info in its depends (legitimate zebra convergence update), or its RIB ID is pending deletion. This is the same skip logic used by `_is_skipable_nhg()`.
 
-#### 8. _parse_rec_timestamp(line):
+#### 10. `get_dut_timestamp(duthost)`
+
+Return the current DUT time as a datetime object (one RPC call). Uses the same microsecond precision as swss rec file timestamps so the returned value can be compared directly against parsed rec line timestamps.
+
+**Implementation**: Run `date +%Y-%m-%d.%H:%M:%S.%6N` on the DUT, parse the result with `datetime.datetime.strptime(ts_str, "%Y-%m-%d.%H:%M:%S.%f")`. Returns `None` on parse failure.
+
+#### 11. `_parse_rec_timestamp(line)`
+
 Extract the timestamp from a swss rec line as a datetime object.
 
-    Rec line format: YYYY-MM-DD.HH:MM:SS.ffffff|<rest>
-    Returns None if the line doesn't start with a recognizable timestamp.
+Rec line format: `YYYY-MM-DD.HH:MM:SS.ffffff|<rest>`
+
+**Implementation**: Use regex `r'^(\d{4}-\d{2}-\d{2}\.\d{2}:\d{2}:\d{2}\.\d+)'` to extract the timestamp prefix, then parse with `datetime.datetime.strptime(match.group(1), "%Y-%m-%d.%H:%M:%S.%f")`. Returns `None` if the line doesn't start with a recognizable timestamp.
 
 ### 8.4.3 Failure Triggers
+
+All tests begin by applying static routes via `apply_config_cmmds_to_vtysh` then waiting 30s for FRR convergence and ASIC offload to complete before triggering any failure.
 
 Three failure mechanisms are used across the six test cases:
 
@@ -2567,14 +2667,14 @@ Three failure mechanisms are used across the six test cases:
 |-----------|---------|-------|--------|
 | **Local link down** | PE3: `sudo ifconfig Ethernet12 down` | PE3 | fc06::2 unreachable, immediate NHT event |
 | **Remote BGP shutdown** | PE1: `vtysh -c 'configure terminal' -c 'router bgp 64600' -c 'neighbor 2064:300::1f shutdown'` | PE1 | BGP NOTIFICATION sent, immediate clean withdrawal of 2064:100::1d (single ROUTE_DELETE, no replacement) |
-| **Remote IGP sequential** | Step 1: P1 `sudo ifconfig Ethernet112 down`, wait 20s; Step 2: P3 `sudo ifconfig Ethernet4 down` | P1, P3 | First link causes route replacement (PE1 reconverges via remaining path); 20s cooldown lets replacement settle; second link causes full withdrawal of 2064:100::1d |
+| **Remote IGP sequential** | Step 1: P1 `sudo ifconfig Ethernet112 down`, wait 40s; Step 2: P3 `sudo ifconfig Ethernet4 down` | P1, P3 | First link causes route replacement (PE1 reconverges via remaining path); 40s cooldown lets replacement settle (including NHT re-evaluation after ASIC offload); second link causes full withdrawal of 2064:100::1d |
 
 **Recovery**
 
 | Failure | Recovery | Wait Time |
 |---------|----------|-----------|
-| Local | PE3: `sudo ifconfig Ethernet12 up` | 10s |
-| Remote BGP | PE1: `vtysh -c 'configure terminal' -c 'router bgp 64600' -c 'no neighbor 2064:300::1f shutdown'` | 15s |
+| Local | PE3: `sudo ifconfig Ethernet12 up` | 20s |
+| Remote BGP | PE1: `vtysh -c 'configure terminal' -c 'router bgp 64600' -c 'no neighbor 2064:300::1f shutdown'` | 20s |
 | Remote IGP | P1: `sudo ifconfig Ethernet112 up` + P3: `sudo ifconfig Ethernet4 up` | 15s |
 
 **Assertions**
@@ -2583,73 +2683,209 @@ Three failure mechanisms are used across the six test cases:
 |-----------|---------------|----------------|---------|--------------|
 | T1/T2 Local (fc06::2 down) | `fc06::2` | `fc08::2` | 10s | `verify_nhg_before_routes` Check if NHG updates would be triggered by NHT before routes updates|
 | T1/T2 Remote BGP (PE1 BGP shutdown) | `2064:100::1d` | `2064:200::1e` | 10s | `verify_no_nhg_update`, check if there is no NHG update since it is BGP routes switch from 2->1 one by one case |
-| T1/T2 Remote IGP (sequential link failure) | `2064:100::1d` | `2064:200::1e` | 30s | `TODO, need to enhance BGP to provide priority to infra routes first.` |
+| T1/T2 Remote IGP (sequential link failure) | `2064:100::1d` | `2064:200::1e` | 30s | None — BGP does not give priority to infra route updates over VRF route updates, so PIC NHG ordering cannot be reliably verified from the swss record file. |
 
 ### 8.4.4 Test Cases
 
 We create 6 independent test cases (3 per topology). Each test:
 - Sets up its own topology (static routes via vtysh)
 - Verifies initial state before triggering failure
-- Asserts after APPDB or swss rec file verification fails
+- Asserts after APPDB or swss rec file verification
 - Cleans up (recover + remove routes)
 
-#### Topology 1 Static Routes (applied on PE3)
-```
-ipv6 route 1::1/128 2064:100::1d
-ipv6 route 1::1/128 2064:200::1e
-ipv6 route 2::2/128 2064:200::1e
-ipv6 route 3::3/128 1::1
-ipv6 route 3::3/128 2::2
-ipv6 route 4::4/128 1::1
+Tests are added to the existing `test_srv6_basic_sanity.py` file, importing helpers from `srv6_utils.py`:
+```python
+from srv6_utils import (
+    apply_config_cmmds_to_vtysh,
+    start_record_collection,
+    stop_record_collection,
+    assert_appdb_nexthop_removed,
+    assert_appdb_nexthop_present,
+    verify_no_nhg_update,
+    verify_nhg_before_routes,
+    get_dut_timestamp,
+    turn_on_off_frr_debug,
+    collect_frr_debugfile,
+)
 ```
 
-#### Topology 2 Static Routes (applied on PE3)
+#### Module-Level Constants
+
+Define static route lists and their removal counterparts (with `no` prefix):
+
+```python
+# Topology 1: Global Table Recursive Routes (applied on PE3)
+TOPO1_STATIC_ROUTES = [
+    "ipv6 route 1::1/128 2064:100::1d",
+    "ipv6 route 1::1/128 2064:200::1e",
+    "ipv6 route 2::2/128 2064:200::1e",
+    "ipv6 route 3::3/128 1::1",
+    "ipv6 route 3::3/128 2::2",
+    "ipv6 route 4::4/128 1::1",
+]
+
+TOPO1_STATIC_ROUTES_REMOVE = [
+    "no ipv6 route 1::1/128 2064:100::1d",
+    "no ipv6 route 1::1/128 2064:200::1e",
+    "no ipv6 route 2::2/128 2064:200::1e",
+    "no ipv6 route 3::3/128 1::1",
+    "no ipv6 route 3::3/128 2::2",
+    "no ipv6 route 4::4/128 1::1",
+]
+
+# Topology 2: Global Table with Direct + Recursive Mix (applied on PE3)
+TOPO2_STATIC_ROUTES = [
+    "ipv6 route 1::1/128 2064:100::1d",
+    "ipv6 route 1::1/128 2064:200::1e",
+    "ipv6 route 2::2/128 fc06::2",
+    "ipv6 route 3::3/128 fc08::2",
+    "ipv6 route 4::4/128 2::2",
+    "ipv6 route 4::4/128 3::3",
+]
+
+TOPO2_STATIC_ROUTES_REMOVE = [
+    "no ipv6 route 1::1/128 2064:100::1d",
+    "no ipv6 route 1::1/128 2064:200::1e",
+    "no ipv6 route 2::2/128 fc06::2",
+    "no ipv6 route 3::3/128 fc08::2",
+    "no ipv6 route 4::4/128 2::2",
+    "no ipv6 route 4::4/128 3::3",
+]
 ```
-ipv6 route 1::1/128 2064:100::1d
-ipv6 route 1::1/128 2064:200::1e
-ipv6 route 2::2/128 fc06::2
-ipv6 route 3::3/128 fc08::2
-ipv6 route 4::4/128 2::2
-ipv6 route 4::4/128 3::3
+
+#### Common Test Pattern
+
+All 6 test cases follow a shared structure. 
+Note: for IGP fail case, due to current BGP implementation, we can't achieve all PIC NHG handled before service routes a.k.a vrf routes in this case.
+
+**Local, IGP and BGP failure tests** (`test_failed` flag pattern):
+
+```python
+def test_topologyN_xxx_failure(duthosts, nbrhosts):  # or (duthosts, rand_one_dut_hostname, nbrhosts)
+    duthost = nbrhosts["PE3"]['host']
+    testcase_name = "<name>"  # e.g., "t1_local", "t1_remote_bgp", "t2_remote"
+
+    # Setup: apply routes and wait for convergence
+    apply_config_cmmds_to_vtysh(duthost, TOPON_STATIC_ROUTES)
+    time.sleep(30)  # wait for FRR convergence + ASIC offload
+
+    zebra_debug_file = "/tmp/zebra_log_{testcase_name}.txt"
+    test_failed = True
+    try:
+        # PRE-TRIGGER: verify expected initial state
+        assert_appdb_nexthop_present(duthost, "<nexthop_that_will_be_removed>")
+        assert_appdb_nexthop_present(duthost, "<nexthop_that_should_remain>")
+
+        # Start instrumentation
+        turn_on_off_frr_debug(duthosts, "", nbrhosts, zebra_debug_file, "PE3", True)
+        start_record_collection(duthost, testcase_name)
+
+        # TRIGGER: capture timestamp immediately before the failure action
+        trigger_ts = get_dut_timestamp(duthost)
+        <trigger action>
+
+        # POST-TRIGGER: verify convergence
+        assert_appdb_nexthop_removed(duthost, "<nexthop>", timeout=10)
+        assert_appdb_nexthop_present(duthost, "<remaining_nexthop>")
+
+        # VERIFICATION: ordering or absence check
+        verify_nhg_before_routes(duthost, testcase_name, "<nexthop>", trigger_ts)
+        # or: verify_no_nhg_update(duthost, testcase_name, trigger_ts)
+        test_failed = False
+
+    finally:
+        # RECOVERY
+        <recovery action>
+        time.sleep(20)
+
+        try:
+            # RECOVERY PATH CHECK: verify nexthops restored
+            # Only run if the test itself passed (avoid flagging known bad state)
+            if not test_failed:
+                assert_appdb_nexthop_present(duthost, "<nexthop_that_was_removed>")
+                assert_appdb_nexthop_present(duthost, "<remaining_nexthop>")
+        finally:
+            # CLEANUP (always runs, even if recovery assertions fail)
+            stop_record_collection(duthost, testcase_name)
+            turn_on_off_frr_debug(duthosts, "", nbrhosts, zebra_debug_file, "PE3", False)
+            collect_frr_debugfile(duthosts, "", nbrhosts, zebra_debug_file, "PE3")
+            apply_config_cmmds_to_vtysh(duthost, TOPON_STATIC_ROUTES_REMOVE)
 ```
+
+**Key design decisions**:
+- `time.sleep(30)` after applying routes: ensures FRR convergence and ASIC offload complete before testing.
+- `time.sleep(40)` for IGP cooldown: the route replace event must fully settle (including re-evaluation) before the second link failure.
+- `time.sleep(20)` after recovery: allows enough time for NHG re-notification and APPDB restoration.
+- `test_failed` flag: prevents recovery path assertions from running when the primary test already failed (avoids cascading failures masking the root cause).
+- Nested try/finally: ensures cleanup always runs regardless of assertion failures.
+- `trigger_ts`: captured immediately before the trigger action via `get_dut_timestamp()`, passed to verification functions for 3-second window filtering.
+
+#### Function Signatures
+
+| Test | Parameters | Needs P1/P3? |
+|:-----|:-----------|:-------------|
+| `test_topology1_local_failure` | `(duthosts, nbrhosts)` | No |
+| `test_topology1_remote_bgp_failure` | `(duthosts, rand_one_dut_hostname, nbrhosts)` | PE1 only |
+| `test_topology1_remote_igp_failure` | `(duthosts, rand_one_dut_hostname, nbrhosts)` | P1 + P3 |
+| `test_topology2_local_failure` | `(duthosts, nbrhosts)` | No |
+| `test_topology2_remote_bgp_failure` | `(duthosts, rand_one_dut_hostname, nbrhosts)` | PE1 only |
+| `test_topology2_remote_igp_failure` | `(duthosts, rand_one_dut_hostname, nbrhosts)` | P1 + P3 |
+
+Node access patterns:
+- `duthost = nbrhosts["PE3"]['host']` — DUT (where static routes are applied)
+- `pe1_host = nbrhosts["PE1"]['host']` — for BGP shutdown
+- `p1 = duthosts[rand_one_dut_hostname]` — P1 node (is the actual DUT host in the testbed)
+- `p3 = nbrhosts["P3"]['host']` — P3 node
 
 #### `test_topology1_local_failure`
 
-**Static routes:** TOPO1 applied on PE3
+**testcase_name:** `"t1_local"`
 
 **Trigger:**
 ```
-PE3: sudo ifconfig Ethernet12 down
+duthost.command("sudo ifconfig Ethernet12 down")
 ```
 
-**Verification:**
+**Post-trigger assertions:**
 - `assert_appdb_nexthop_removed(duthost, "fc06::2", timeout=10)`
 - `assert_appdb_nexthop_present(duthost, "fc08::2")`
-- `verify_nhg_before_routes(duthost, "t1_local", "fc06::2")` — all NHG updates precede route updates in swss record
 
-**Recovery:** PE3 `sudo ifconfig Ethernet12 up`, wait 10s
+**Verification:**
+- `verify_nhg_before_routes(duthost, testcase_name, "fc06::2", trigger_ts)`
 
+**Recovery:** `duthost.command("sudo ifconfig Ethernet12 up")`, wait 20s
+
+**Recovery path check:** verify both `fc06::2` and `fc08::2` are present again.
 
 
 #### `test_topology1_remote_bgp_failure`
 
-**Static routes:** TOPO1 applied on PE3
+**testcase_name:** `"t1_remote_bgp"`
 
 **Trigger:**
-```
-PE1: vtysh -c 'configure terminal' -c 'router bgp 64600' -c 'neighbor 2064:300::1f shutdown'
+```python
+pe1_host.command("vtysh -c 'configure terminal' -c 'router bgp 64600' "
+                 "-c 'neighbor 2064:300::1f shutdown'")
 ```
 BGP NOTIFICATION sent immediately → clean single ROUTE_DELETE, no intermediate replacement.
 
-
-**Verification:**
+**Post-trigger assertions:**
 - `assert_appdb_nexthop_removed(duthost, "2064:100::1d", timeout=10)`
 - `assert_appdb_nexthop_present(duthost, "2064:200::1e")`
-- `verify_no_nhg_update` check swss record file for this test case and there is no NHG event. 
 
-**Recovery:** PE1 `vtysh -c 'configure terminal' -c 'router bgp 64600' -c 'no neighbor 2064:300::1f shutdown'`, wait 15s
+**Verification:**
+- `verify_no_nhg_update(duthost, testcase_name, trigger_ts)` — confirms no NHG update since this is a BGP route withdrawal (2 paths to 1 path) handled by route-level updates only.
 
-Here is an example swss record file 
+**Recovery:**
+```python
+pe1_host.command("vtysh -c 'configure terminal' -c 'router bgp 64600' "
+                 "-c 'no neighbor 2064:300::1f shutdown'")
+```
+Wait 20s.
+
+**Recovery path check:** verify both `2064:100::1d` and `2064:200::1e` are present again.
+
+Here is an example swss record file showing only ROUTE_TABLE updates (no NEXTHOP_GROUP_TABLE):
 ```
 2026-05-20.02:43:45.709923|ROUTE_TABLE:2::2|DEL
 2026-05-20.02:43:45.749917|ROUTE_TABLE:3::3|DEL
@@ -2675,81 +2911,95 @@ Here is an example swss record file
 
 #### `test_topology1_remote_igp_failure`
 
-**Static routes:** TOPO1 applied on PE3
+**testcase_name:** `"t1_remote_igp"`
 
 **Trigger (sequential):**
 ```
-Step 1: P1: sudo ifconfig Ethernet112 down
-        → wait 20s (route replace event cools down, ASIC offload settles)
-Step 2: P3: sudo ifconfig Ethernet4 down
-        → start record collection here (captures only the withdrawal/PIC event)
+Step 1: p1.command("sudo ifconfig Ethernet112 down")
+        → time.sleep(40)  (route replace event cools down, ASIC offload settles)
+        → start instrumentation (turn_on_off_frr_debug + start_record_collection)
+Step 2: p3.command("sudo ifconfig Ethernet4 down")
 ```
-First link causes a route replacement (PE1 reconverges via remaining uplink). The 20s gap lets the replacement fully settle before the second link triggers full withdrawal of `2064:100::1d`, exercising PIC edge handling.
+First link causes a route replacement (PE1 reconverges via remaining uplink). The 40s gap lets the replacement fully settle (including NHT re-evaluation after ASIC offload notification) before the second link triggers full withdrawal of `2064:100::1d`, exercising PIC edge handling.
 
-**Verification:**
+**Post-trigger assertions:**
 - `assert_appdb_nexthop_removed(duthost, "2064:100::1d", timeout=30)`
 - `assert_appdb_nexthop_present(duthost, "2064:200::1e")`
-- `verify_record_has_pattern(duthost, "t1_remote_igp", "NEXTHOP_GROUP_TABLE")`
 
-**Recovery:** P1 `sudo ifconfig Ethernet112 up` + P3 `sudo ifconfig Ethernet4 up`, wait 15s
+**Verification:** None — in the remote IGP failure scenario, BGP does not give priority to infra route updates over VRF route updates, so we cannot reliably verify PIC NHG ordering from the swss record file.
 
-Here is an example swss record file 
-```
-```
+**Recovery:** `p1.command("sudo ifconfig Ethernet112 up")` + `p3.command("sudo ifconfig Ethernet4 up")`, wait 15s
+
 
 #### `test_topology2_local_failure`
 
-**Static routes:** TOPO2 applied on PE3
+**testcase_name:** `"t2_local"`
 
 **Trigger:**
 ```
-PE3: sudo ifconfig Ethernet12 down
+duthost.command("sudo ifconfig Ethernet12 down")
 ```
 
-**Verification:**
+**Post-trigger assertions:**
 - `assert_appdb_nexthop_removed(duthost, "fc06::2", timeout=10)`
 - `assert_appdb_nexthop_present(duthost, "fc08::2")`
-- `verify_nhg_before_routes(duthost, "t2_local", "fc06::2")` — all NHG updates precede route updates in swss record
 
-**Recovery:** PE3 `sudo ifconfig Ethernet12 up`, wait 10s
+**Verification:**
+- `verify_nhg_before_routes(duthost, testcase_name, "fc06::2", trigger_ts)`
+
+**Recovery:** `duthost.command("sudo ifconfig Ethernet12 up")`, wait 20s
+
+**Recovery path check:** verify both `fc06::2` and `fc08::2` are present again.
 
 
 #### `test_topology2_remote_bgp_failure`
 
-**Static routes:** TOPO2 applied on PE3
+**testcase_name:** `"t2_remote"`
 
 **Trigger:**
-```
-PE1: vtysh -c 'configure terminal' -c 'router bgp 64600' -c 'neighbor 2064:300::1f shutdown'
+```python
+pe1_host.command("vtysh -c 'configure terminal' -c 'router bgp 64600' "
+                 "-c 'neighbor 2064:300::1f shutdown'")
 ```
 BGP NOTIFICATION sent immediately → clean single ROUTE_DELETE, no intermediate replacement.
 
-**Verification:**
+**Post-trigger assertions:**
 - `assert_appdb_nexthop_removed(duthost, "2064:100::1d", timeout=10)`
 - `assert_appdb_nexthop_present(duthost, "2064:200::1e")`
-- `verify_no_nhg_update` check swss record file for this test case and there is no NHG event. 
 
-**Recovery:** PE1 `vtysh -c 'configure terminal' -c 'router bgp 64600' -c 'no neighbor 2064:300::1f shutdown'`, wait 15s
+**Verification:**
+- `verify_no_nhg_update(duthost, testcase_name, trigger_ts)` — confirms no NHG update.
+
+**Recovery:**
+```python
+pe1_host.command("vtysh -c 'configure terminal' -c 'router bgp 64600' "
+                 "-c 'no neighbor 2064:300::1f shutdown'")
+```
+Wait 20s.
+
+**Recovery path check:** verify both `2064:100::1d` and `2064:200::1e` are present again.
 
 
 #### `test_topology2_remote_igp_failure`
 
-**Static routes:** TOPO2 applied on PE3
+**testcase_name:** `"t2_remote_igp"`
 
 **Trigger (sequential):**
 ```
-Step 1: P1: sudo ifconfig Ethernet112 down
-        → wait 20s (route replace event cools down, ASIC offload settles)
-Step 2: P3: sudo ifconfig Ethernet4 down
-        → start record collection here (captures only the withdrawal/PIC event)
+Step 1: p1.command("sudo ifconfig Ethernet112 down")
+        → time.sleep(40)
+        → start instrumentation
+Step 2: p3.command("sudo ifconfig Ethernet4 down")
 ```
 Same rationale as topology 1 IGP failure. Topology 2's direct + recursive mix means the withdrawal triggers PIC edge handling across both direct-path (2::2, 3::3) and recursive-path (1::1) NHGs.
 
-**Verification:**
+**Post-trigger assertions:**
 - `assert_appdb_nexthop_removed(duthost, "2064:100::1d", timeout=30)`
 - `assert_appdb_nexthop_present(duthost, "2064:200::1e")`
 
-**Recovery:** P1 `sudo ifconfig Ethernet112 up` + P3 `sudo ifconfig Ethernet4 up`, wait 15s
+**Verification:** None (same reasoning as topology 1 IGP failure).
+
+**Recovery:** `p1.command("sudo ifconfig Ethernet112 up")` + `p3.command("sudo ifconfig Ethernet4 up")`, wait 15s
 
 # 9. Appendix
 This section documents all the issues met when using LLM to brainstorm, code generation, compile and testing. The main skills are similar to skills listed in https://github.com/obra/superpowers/tree/main/skills and https://github.com/numman-ali/openskills. At high level, we use brainstorm skill to go over LLD in detail and use writing-plan skill to generate codes after brainstorming.
