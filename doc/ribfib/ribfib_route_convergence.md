@@ -6,6 +6,11 @@
   - [1. Language Standard](#1-language-standard)
   - [2. Header Include Paths: Export vs. Internal Files](#2-header-include-paths-export-vs-internal-files)
 - [3. FRR Modifications](#3-frr-modifications)
+  - [Some Common FRR changes](#some-common-frr-changes)
+    - [Queued-route filter relaxation in `zebra_rnh_resolve_nexthop_entry()`](#queued-route-filter-relaxation-in-zebra_rnh_resolve_nexthop_entry)
+    - [`copy_state()` Fix: Preserve NHE ID](#copy_state-fix-preserve-nhe-id)
+    - [Tolerating `ENOENT` / `ESRCH` on `RTM_DELNEXTHOP` in `netlink_parse_error()`](#tolerating-enoent--esrch-on-rtm_delnexthop-in-netlink_parse_error)
+    - [Skipping inactive singleton members in `zebra_nhg_nhe2grp_internal()`](#skipping-inactive-singleton-members-in-zebra_nhg_nhe2grp_internal)
   - [RNH event information](#rnh-event-information)
     - [Core RNH Tracking Fields](#core-rnh-tracking-fields)
     - [Change Detection Logic](#change-detection-logic)
@@ -14,14 +19,16 @@
     - [Extended Dplane Context](#extended-dplane-context)
     - [RNH Info Structure Definition](#rnh-info-structure-definition)
     - [Event Generation Workflow](#event-generation-workflow)
-      - [`copy_state()` Fix: Preserve NHE ID](#copy_state-fix-preserve-nhe-id)
-      - [NHT Event Generation in `zebra_rnh_eval_nexthop_entry()`](#nht-event-generation-in-zebra_rnh_eval_nexthop_entry)
-      - [Signature change for `zebra_rnh_resolve_nexthop_entry()`](#signature-change-for-zebra_rnh_resolve_nexthop_entry)
+      - [Reference implementation: `zebra_rnh_eval_nexthop_entry()`](#reference-implementation-zebra_rnh_eval_nexthop_entry)
       - [`dplane_nht_event_update()` Function](#dplane_nht_event_update-function)
       - [Accessor Functions](#accessor-functions)
       - [Boilerplate Switch Cases](#boilerplate-switch-cases)
-      - [`zebra_rnh_clear_nhc_flag()` Update](#zebra_rnh_clear_nhc_flag-update)
       - [Include Dependency](#include-dependency)
+  - [Triggering `REINSTALL_FPM_ONLY` for in-flight and KEEP\_AROUND-revival cases](#triggering-reinstall_fpm_only-for-in-flight-and-keep_around-revival-cases)
+    - [Setting `REINSTALL_FPM_ONLY` at the right level (parent NHG, not inserted child)](#setting-reinstall_fpm_only-at-the-right-level-parent-nhg-not-inserted-child)
+    - [Case A: dependents change while an install is in flight (QUEUED)](#case-a-dependents-change-while-an-install-is-in-flight-queued)
+    - [Case B: NHG revived from KEEP\_AROUND (delayed-delete)](#case-b-nhg-revived-from-keep_around-delayed-delete)
+    - [Summary](#summary)
 - [4. FPM Message Serialization (SONiC Integration)](#4-fpm-message-serialization-sonic-integration)
   - [Include Dependency](#include-dependency-1)
   - [Custom Message Type](#custom-message-type)
@@ -165,13 +172,13 @@
 
 
 # 1. Problem Statements
-In the current SONiC architecture, `orchagent` mitigates traffic loss during local port-down events by rapidly removing failed load-balancing members. However, in broader failure scenarios, FRR generates a replacement Next Hop Group (NHG) and sequentially migrates dependent prefixes. This approach causes the traffic loss window to scale linearly with the number of affected prefixes, resulting in suboptimal convergence latency.To eliminate this prefix-dependent convergence delay, we propose a Prefix-Independent Convergence (PIC) mechanism. The detail of PIC and RIB/FIB archtitecture could be found in corresponding HLDs. This document focuses on how to implement route convergence in RIB/FIB architecture to support PIC. 
+In the current SONiC architecture, `orchagent` mitigates traffic loss during local port-down events by rapidly removing failed load-balancing members. However, in broader failure scenarios, FRR generates a replacement Next Hop Group (NHG) and sequentially migrates dependent prefixes. This approach causes the traffic loss window to scale linearly with the number of affected prefixes, resulting in suboptimal convergence latency.To eliminate this prefix-dependent convergence delay, we propose a Prefix-Independent Convergence (PIC) mechanism. The detail of PIC and RIB/FIB archtitecture could be found in corresponding HLDs. This document focuses on how to implement route convergence in RIB/FIB architecture to support PIC.
 
 When fpmsyncd receives a Next Hop Tracking (NHT) update from zebra, it initiates a targeted reconciliation process. By performing a dependency backwalk from the invalidated NHG, the system identifies all downstream NHGs and applies coordinated state updates. The primary objective is to immediately prune failed forwarding paths, minimizing the traffic loss window while the control plane asynchronously recalculates and installs optimal routes in the background.
 
 The implementation comprises five core components:
 * **FRR Modification**: Route all NHT events to the FPM interface exclusively through the dplane subsystem. The code changes are in FRR
-* **SONiC FPM Adaptation**: Translate NHT events into standardized FPM messages. The code changes are in sonic-buildimage's sonic fpm. 
+* **SONiC FPM Adaptation**: Translate NHT events into standardized FPM messages. The code changes are in sonic-buildimage's sonic fpm.
 * **sonic-fib Enhancement**: Introduce a new data schema to map NHT events, capturing both the impacted next hop and its corresponding NHG identifier. The code changes are in sonic-buildimage's sonic fib lib.
 * **fpmsyncd Logic**: Traverse all dependent NHGs and rapidly reconcile the affected forwarding state. The code changes are in sonic-swss.
 * **7-Node System Verification**: Validate route convergence correctness through comprehensive end-to-end testing on a seven-node topology. The code changes are in sonic-mgmt.
@@ -180,7 +187,7 @@ The implementation comprises five core components:
 # 2. General Code Generation Rules
 This Low-Level Design (LLD) is deliberately authored with implementation-grade specificity to function as a high-fidelity prompt for LLM-powered code generation tools (e.g., Qoder CLI: https://qoder.com/en/cli, Claude CLI: https://code.claude.com/docs/en/cli-reference). The goal is to enable reliable, specification-to-code automation with minimal ambiguity.
 
-The following are couple general coding rules to guide LLM to generate codes. 
+The following are couple general coding rules to guide LLM to generate codes.
 
 ## 1. Language Standard
   * C++14 is the required baseline for all SONiC C++ components (sonic-swss, sonic-fib, etc.).
@@ -211,6 +218,129 @@ Critical: Mixing these styles causes build failures:
 # 3. FRR Modifications
 This section outlines modifications to FRRouting (FRR) to enhance Next Hop Tracking (NHT) event propagation from Zebra to the dplane, enabling fpmsyncd to respond proactively to nexthop changes and minimize traffic loss during convergence.
 
+## Some Common FRR changes
+### Queued-route filter relaxation in `zebra_rnh_resolve_nexthop_entry()`
+
+This relaxation has been accepted upstream as FRR PR 22221 ("zebra: Allow rnh evaluation for a queued and !installed rn", merged 2026-06-05): https://github.com/FRRouting/frr/pull/22221. It is no longer a SONiC-local patch; once that commit is in the FRR baseline this section is informational only.
+
+The upstream resolver in `zebra_rnh_resolve_nexthop_entry()` (in `zebra/zebra_rnh.c`) skipped any RE that had `ROUTE_ENTRY_QUEUED` set. This is too strict: a route can be both QUEUED (because zebra has re-scheduled an install) and already INSTALLED (because a previous install already completed). In that case the route is still a valid resolver, and we want the NHT state-change to flow through to the dplane event.
+
+Relax the filter so that only routes that are QUEUED **and not yet INSTALLED** are skipped (PR 22221 hunk):
+
+```diff
+-                       if (CHECK_FLAG(re->status, ROUTE_ENTRY_QUEUED)) {
++                       if (CHECK_FLAG(re->status, ROUTE_ENTRY_QUEUED) &&
++                           !CHECK_FLAG(re->status, ROUTE_ENTRY_INSTALLED)) {
+                                if (IS_ZEBRA_DEBUG_NHT_DETAILED)
+                                        zlog_debug(
+                                                "        Route Entry %s queued",
+```
+
+Without this change, an already-installed RE that gets re-queued (e.g. on metric change or recursive resolver flap) would be silently skipped by the resolver, `re` would be returned NULL, and the NHT event for the affected rnh would never be generated.
+
+### `copy_state()` Fix: Preserve NHE ID
+
+The existing `copy_state()` call uses `zebra_nhe_copy(re->nhe, 0)`, which zeroes the NHE ID in the cached state. This breaks `prev_nhg_id` caching — when `zebra_rnh_eval_nexthop_entry()` reads `rnh->state->nhe->id` before `copy_state()`, it gets 0 instead of the actual previous NHG ID.
+
+**Fix**: based on Mark's comments, we cache the resolved NHG ID directly on `struct rnh` rather than re-stamping it onto the cached `nhe`. This is implemented as upstream FRR PR 21892 (https://github.com/FRRouting/frr/pull/21892). The two hunks are:
+
+**1. Add `resolved_nhg_id` field to `struct rnh` in `zebra/rib.h`:**
+
+```diff
+diff --git a/zebra/rib.h b/zebra/rib.h
+@@ -50,6 +50,14 @@ struct rnh {
+ 	uint32_t seqno;
+
+ 	struct route_entry *state;
++
++	/* The NHG ID of the resolved route entry. Used by NHT consumers
++	 * (e.g. fpmsyncd) to identify the nexthop-group when building FIB
++	 * entries from NHT notifications. We cache this ID in rnh instead
++	 * of the cached NHG entry due to some misuse concern on the cached
++	 * NHG entry after it gets a valid NHG ID.
++	 */
++	uint32_t resolved_nhg_id;
+ 	struct prefix resolved_route;
+ 	struct list *client_list;
+```
+
+**2. Reset / stamp `rnh->resolved_nhg_id` inside `copy_state()` in `zebra/zebra_rnh.c`:**
+
+```diff
+diff --git a/zebra/zebra_rnh.c b/zebra/zebra_rnh.c
+@@ -867,6 +867,7 @@ static void copy_state(struct rnh *rnh, const struct route_entry *re,
+ 		free_state(rnh->vrf_id, rnh->state, rn);
+ 		rnh->state = NULL;
+ 	}
++	rnh->resolved_nhg_id = 0;
+
+ 	if (!re)
+ 		return;
+@@ -879,6 +880,7 @@ static void copy_state(struct rnh *rnh, const struct route_entry *re,
+ 	state->status = re->status;
+
+ 	state->nhe = zebra_nhe_copy(re->nhe, 0);
++	rnh->resolved_nhg_id = re->nhe->id;
+```
+
+Note: `state->nhe = zebra_nhe_copy(re->nhe, 0)` is left intact — the cached NHE retains id=0 by design to avoid id collisions on the cached copy. The real id is now carried on `rnh->resolved_nhg_id`, which is what NHT consumers (and the dplane event below) read.
+
+### Tolerating `ENOENT` / `ESRCH` on `RTM_DELNEXTHOP` in `netlink_parse_error()`
+
+The dplane runs providers in a chain (kernel → FPM → ...). When the kernel provider returns a hard failure for an NHG delete, zebra marks the ctx as failed and the FPM provider never gets to run. That breaks SONiC convergence in a specific scenario:
+
+1. An interface goes down. The kernel auto-purges every NHG that recursively pointed through that interface.
+2. Zebra later issues `RTM_DELNEXTHOP` for those same NHGs as part of its own cleanup.
+3. The kernel responds with `-ENOENT` (or `-ESRCH`) because the NHG is already gone.
+4. Zebra treats that as a real error, the dplane ctx never reaches the FPM provider, and SONiC's APPDB is left with stale `NEXTHOP_GROUP_TABLE` entries that should have been deleted.
+
+The fix is to add `RTM_DELNEXTHOP` + `ENOENT|ESRCH` to the existing "expected error" allowlist in `netlink_parse_error()`. When matched, `netlink_parse_error()` returns success so the ctx continues down the provider chain to FPM, which then issues the corresponding APPDB delete.
+
+```diff
+diff --git a/zebra/kernel_netlink.c b/zebra/kernel_netlink.c
+@@ -1015,6 +1015,8 @@ static int netlink_parse_error(const struct nlsock *nl, struct nlmsghdr *h,
+ 	      (-errnum == ENODEV || -errnum == ESRCH)) ||
+ 	     (msg_type == RTM_NEWROUTE &&
+ 	      (-errnum == ENETDOWN || -errnum == EEXIST)) ||
++	     (msg_type == RTM_DELNEXTHOP &&
++	      (-errnum == ENOENT || -errnum == ESRCH)) ||
+ 	     ((msg_type == RTM_NEWTUNNEL || msg_type == RTM_DELTUNNEL ||
+ 	       msg_type == RTM_GETTUNNEL) &&
+ 	      (-errnum == EOPNOTSUPP)))) {
+```
+
+Rationale: the kernel having already removed the NHG is not a bug from zebra's perspective — the desired end-state (NHG absent from kernel) is achieved. What matters for SONiC is that the *FPM provider still runs* and emits the delete, so the rest of the stack can converge. The allowlist treats these two errnos as benign for `RTM_DELNEXTHOP` only; other RTM ops and other errnos continue to be flagged.
+
+### Skipping inactive singleton members in `zebra_nhg_nhe2grp_internal()`
+
+When zebra builds the per-group dependent list to hand down to the dplane install path, every depend (singleton NHG) is appended unconditionally, including those whose underlying nexthop has gone inactive (e.g. interface down, recursive resolver lost). The kernel then rejects the entire group because one of its members is invalid, and the result is that SONiC sees a missing group rather than a group with the inactive member pruned.
+
+This is addressed upstream by FRR PR 22133 ("zebra: skip inactive nexthop when building NHG for kernel install", https://github.com/FRRouting/frr/pull/22133, currently open). The fix adds a per-depend `NEXTHOP_FLAG_ACTIVE` check before appending to the install array — inactive singletons are skipped so they don't poison the whole NHG programming, while the rest of the group still installs.
+
+```diff
+diff --git a/zebra/zebra_nhg.c b/zebra/zebra_nhg.c
+@@ -3389,6 +3415,17 @@ static uint16_t zebra_nhg_nhe2grp_internal(struct nh_grp *grp, uint16_t curr_ind
+ 				continue;
+ 			}
+
++			if (depend->nhg.nexthop &&
++			    !CHECK_FLAG(depend->nhg.nexthop->flags,
++					NEXTHOP_FLAG_ACTIVE)) {
++				if (IS_ZEBRA_DEBUG_RIB_DETAILED
++				    || IS_ZEBRA_DEBUG_NHG)
++					zlog_debug(
++						"%s: Nexthop ID (%u) is inactive, not appending to dataplane install group",
++						__func__, depend->id);
++				continue;
++			}
++
+ 			/* Check for duplicate IDs, ignore if found. */
+ 			for (int j = 0; j < i; j++) {
+ 				if (depend->id == grp[j].id) {
+```
+
+Interaction with the rest of section 3: this skip happens at install-group assembly time, which runs *before* `zebra_nhg_dplane_result()` and the `REINSTALL_FPM_ONLY` consumer (Case A above). When the inactive depend later flips back to active — typically via NHT re-resolution — the parent NHG becomes a candidate for `REINSTALL_FPM_ONLY`, and the dplane-result path described earlier will re-emit the now-complete group to FPM. The two changes are complementary: PR 22133 prevents kernel-side rejection during the failure transient; the QUEUED-window handling ensures FPM converges back to the healthy state once the underlay recovers.
+
 ## RNH event information
 ### Core RNH Tracking Fields
 Each rnh (Route Next Hop) structure maintains the following state for change detection:
@@ -236,8 +366,7 @@ static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
 					 int force, struct route_node *nrn,
 					 struct rnh *rnh,
 					 struct route_node *prn,
-					 struct route_entry *re,
-					 bool route_entry_queued)
+					 struct route_entry *re)
 ```
 
 When a state change is detected (state_changed == true), Zebra must propagate the following context to dplane to enable informed FIB NHT updates.
@@ -248,188 +377,13 @@ The purpose for zebra sends NHT event to fpmsyncd is to give enough information 
 |:---|:---|:---|
 | rnh_prefix | Identifies affected NHGs | — |
 | prev_resolved_prefix | Previous resolving route prefix | 0.0.0.0/0 (or equivalent zero prefix)
-| prev_resolved_nhg_id | Previous resolving NHG identifier | 0 |
+| prev_resolved_nhg_id | Previous resolving NHG identifier which is got from rnh->resolved_nhg_id | 0 |
 | curr_resolved_prefix | Current resolving route prefix | 0.0.0.0/0 |
-| curr_resolved_nhg_id | Current resolving NHG identifier | 0 |
+| curr_resolved_nhg_id | Current resolving NHG identifier which is got from rnh->resolved_nhg_id | 0 |
 
 Note: Currently, all related context is sent to dplane. Processing follows a phased approach:
 * Phase 1: Trigger backwalk when an RNH prefix becomes unresolvable. Walk from the previous resolved NHG ID to prune failed paths from dependent NHGs.
 * Future: Extend handling to cover other cases.
-
-In `zebra_rnh_resolve_nexthop_entry()`, route resolution may temporarily fail if a route entry is still queued and awaiting processing. To prevent unnecessary traffic disruption, we suppress the NHT dplane event (but NOT the entire evaluation) during this window.
-
-**Approach**: Add a new output parameter `bool *route_entry_queued` to `zebra_rnh_resolve_nexthop_entry()`. The function tracks two internal flags (`saw_selected`, `saw_queued`) and sets `*route_entry_queued = true` when all selected candidate routes were skipped due to `ROUTE_ENTRY_QUEUED`. Callers that don't need this information pass `NULL`.
-
-**Important**: The suppression only gates the `dplane_nht_event_update()` call inside `zebra_rnh_eval_nexthop_entry()`. The rest of the evaluation (state change detection, client notifications, pseudowire processing) proceeds normally. This avoids blocking protocol client notifications when routes are queued.
-
-```c
-// In zebra_rnh_evaluate_entry():
-bool route_entry_queued = false;
-re = zebra_rnh_resolve_nexthop_entry(zvrf, afi, nrn, rnh, &prn,
-                                     &route_entry_queued);
-// ... no early return for route_entry_queued ...
-zebra_rnh_eval_nexthop_entry(zvrf, afi, force, nrn, rnh, prn, re,
-                             route_entry_queued);
-
-// In zebra_rnh_eval_nexthop_entry(), gate only the dplane event:
-if (state_changed && !route_entry_queued) {
-    dplane_nht_event_update(...);
-}
-// ... client notifications and pseudowire processing proceed regardless ...
-```
-
-**Recovery**: When the queued route finishes processing and gets offloaded (Step 3 in the code path below), FRR's normal NHT re-evaluation cycle triggers automatically. At that point, `zebra_rnh_resolve_nexthop_entry()` succeeds (the route is no longer queued) and the correct NHT event is sent to FPM. No explicit re-trigger mechanism is needed.
-
-The queued state is handled in the following place in zebra_rnh_resolve_nexthop_entry().
-
-```
-			if (CHECK_FLAG(re->status, ROUTE_ENTRY_QUEUED)) {
-				if (IS_ZEBRA_DEBUG_NHT_DETAILED)
-					zlog_debug(
-						"        Route Entry %s queued",
-						zebra_route_string(re->type));
-				continue;
-			}
-```
-
-While FRR invokes zebra_rnh_resolve_nexthop_entry() from three different call sites, only the final invocation is relevant here. This is because SONiC always runs with --asic-offload=notify_on_offload enabled, making that specific code path the one we need to target.
-
-```
-Detailed Code Path (asic_offloaded = true)
-
-   Step 1: BGP route arrives → process_subq_route() → rib_process()
-     1 process_subq_route()                              [line 2684]
-     2   └── rib_process(rn)                             [line 2696 → 1254]
-     3         │
-     4         ├── RNODE_FOREACH_RE_SAFE: find best route
-     5         │     ├── old_selected = current SELECTED re
-     6         │     ├── nexthop_active_update(rn, re)   [line 1340]
-     7         │     └── rib_choose_best() → new_selected = BGP re  [line 1404]
-     8         │
-     9         ├── SET_FLAG(new_selected, ZEBRA_FLAG_SELECTED)       [line 1459]
-    10         │
-    11         ├── rib_process_add_fib(zvrf, rn, new_fib)            [line 1498]
-    12         │   or rib_process_update_fib(zvrf, rn, old_fib, new_fib) [line 1496]
-    13         │     │
-    14         │     └── rib_install_kernel(rn, new, old)            [line 1014/1102]
-    15         │           │
-    16         │           ├── zebra_nhg_install_kernel(re->nhe)     [line 659]
-    17         │           ├── dest->selected_fib = re               [line 671]
-    18         │           ├── hook_call(rib_update, rn, "installing in kernel")  [line 677]
-    19         │           │     └── (FPM gets notified here via hook)
-    20         │           ├── dplane_route_add(rn, re)              [line 683]
-    21         │           │     └── returns ZEBRA_DPLANE_REQUEST_QUEUED
-    22         │           └── SET_FLAG(re->status, ROUTE_ENTRY_QUEUED)  ← ★ QUEUED SET [line 687]
-    23         │
-    24         ├── UNSET_FLAG(new->status, ROUTE_ENTRY_CHANGED)      [line 1016/1163]
-    25         │
-    26         └── rib_gc_dest(rn)                                   [line 1516]
-    27               └── rib_can_delete_dest() → false (route exists)
-    28               └── returns 0 — NO NHT evaluation
-   At this point: Route is SELECTED, QUEUED, but NOT INSTALLED. No NHT evaluation runs, in 
-
-   ---
-
-   Step 2: Kernel ACK → rib_process_result() 
-     1 rib_process_dplane_results()                      [line 5111]
-     2   └── dplane_ctx_get_op() == DPLANE_OP_ROUTE_INSTALL
-     3        └── dplane_ctx_get_notif_provider() == 0
-     4             └── rib_process_result(ctx)           [line 5185 → 2000]
-     5                   │
-     6                   ├── Find matching re via RNODE_FOREACH_RE    [line 2052]
-     7                   ├── seq = dplane_ctx_get_seq(ctx)            [line 2070]
-     8                   │
-     9                   ├── re->dplane_sequence == seq? YES          [line 2076]
-    10                   │
-    11                   ├── ★ QUEUED flag check:                    [line 2092-2102]
-    12                   │   if (zrouter.asic_offloaded &&            // TRUE
-    13                   │       status == ZEBRA_DPLANE_REQUEST_FAILURE)
-    14                   │       UNSET QUEUED;                        // only on FAILURE
-    15                   │
-    16                   │   if (!zrouter.asic_offloaded ||           // FALSE
-    17                   │       (CHECK_FLAG(re->flags, ZEBRA_FLAG_OFFLOADED) ||  // NOT SET
-    18                   │        CHECK_FLAG(re->flags, ZEBRA_FLAG_OFFLOAD_FAILED))) // NOT SET
-    19                   │   {
-    20                   │       UNSET QUEUED;                        // ★ SKIPPED! condition is false
-    21                   │   }
-    22                   │
-    23                   │   → ROUTE_ENTRY_QUEUED REMAINS SET
-    24                   │
-    25                   ├── status == SUCCESS:                       [line 2119]
-    26                   │     SET_FLAG(re->status, ROUTE_ENTRY_INSTALLED) [line 2122]
-    27                   │     rib_update_re_from_ctx()               [line 2143]
-    28                   │     redistribute_update()                  [line 2169]
-    29                   │
-    30                   └── zebra_rib_evaluate_rn_nexthops(rn, seq, false)  ← ★ NHT EVAL [line 2260]
-    31                         │
-    32                         └── walks up tree, for each rnh:
-    33                               └── zebra_evaluate_rnh(zvrf, afi, 0, p, safi)  [line 917]
-    34                                     └── zebra_rnh_evaluate_entry()            [line ~488]
-    35                                           └── zebra_rnh_resolve_nexthop_entry() [line ~556]
-    36                                                 │
-    37                                                 ├── rn = route_node_match(table, &nrn->p)
-    38                                                 ├── RNODE_FOREACH_RE(rn, re):
-    39                                                 │     ├── CHECK re REMOVED? no
-    40                                                 │     ├── CHECK re SELECTED or FIB_OVERRIDE? YES ✓
-    41                                                 │     ├── ★ CHECK_FLAG(re->status, ROUTE_ENTRY_QUEUED)?
-    42                                                 │     │     → YES! Still set!                [line 611]
-    43                                                 │     │     → zlog_debug("Route Entry %s queued",
-    44                                                 │     │                   zebra_route_string(re->type))
-    45                                                 │     │     → "Route Entry bgp queued"  ← ★★★ YOUR LOG
-    46                                                 │     │     → continue; (SKIP this re)
-    47                                                 │     └── no valid re found
-    48                                                 └── returns NULL (re unresolved)
-    49                                           └── zebra_rnh_eval_nexthop_entry(... re=NULL ...)
-    50                                                 → if rnh->state was already NULL, no state change
-    51                                                 → NHT clients NOT notified (or notified as unreachable)
-   At this point: Route is SELECTED + INSTALLED + QUEUED. NHT skips it. Clients don't see the nexthop resolved.
-
-   ---
-
-   Step 3: FPM/ASIC notification → rib_process_dplane_notify() 
-     1 rib_process_dplane_results()                      [line 5111]
-     2   └── dplane_ctx_get_op() == DPLANE_OP_ROUTE_NOTIFY
-     3        └── rib_process_dplane_notify(ctx)         [line 5189 → 2308]
-     4              │
-     5              ├── rn = rib_find_rn_from_ctx(ctx)              [line 2321]
-     6              ├── Find matching re via RNODE_FOREACH_RE       [line 2343]
-     7              │
-     8              ├── ★ UNSET_FLAG(re->status, ROUTE_ENTRY_QUEUED)  ← QUEUED CLEARED [line 2361]
-     9              ├── UNSET_FLAG(re->status, ROUTE_ENTRY_ROUTE_REPLACING)             [line 2362]
-    10              │
-    11              ├── re == dest->selected_fib? YES               [line 2368]
-    12              │     ├── SET_FLAG(re->flags, ZEBRA_FLAG_OFFLOADED)                 [line 2410]
-    13              │     └── (or ZEBRA_FLAG_OFFLOAD_FAILED)
-    14              │
-    15              ├── start_count = rib_count_installed_nh(re)    [line 2427]
-    16              ├── fib_changed = rib_update_re_from_ctx(re, rn, ctx) [line 2432]
-    17              ├── end_count = rib_count_installed_nh(re)      [line 2446]
-    18              │
-    19              ├── (if start_count==0, end_count>0):           [line 2464]
-    20              │     SET_FLAG(re->status, ROUTE_ENTRY_INSTALLED)
-    21              │     dplane_route_notif_update(rn, re, ...)
-    22              │     redistribute_update(rn, re, NULL)
-    23              │
-    24              └── ★ zebra_rib_evaluate_rn_nexthops(rn, seq, false) ← NHT EVAL [line 2518]
-    25                    │
-    26                    └── walks up tree, for each rnh:
-    27                          └── zebra_evaluate_rnh(zvrf, afi, 0, p, safi)
-    28                                └── zebra_rnh_evaluate_entry()
-    29                                      └── zebra_rnh_resolve_nexthop_entry()
-    30                                            │
-    31                                            ├── RNODE_FOREACH_RE(rn, re):
-    32                                            │     ├── REMOVED? no
-    33                                            │     ├── SELECTED? YES ✓
-    34                                            │     ├── ★ QUEUED? NO! (cleared at line 2361) ✓
-    35                                            │     ├── rnh_check_re_nexthops(re, rnh)? YES ✓
-    36                                            │     └── MATCH! re found
-    37                                            └── returns re, *prn = rn
-    38                                      └── zebra_rnh_eval_nexthop_entry(... re=valid ...)
-    39                                            ├── state_changed = 1
-    40                                            ├── copy_state(rnh, re, nrn)
-    41                                            ├── zebra_rnh_notify_protocol_clients() ← clients notified ✓
-    42                                            └── zebra_rnh_process_pseudowires()
- ```
 
 ## Dplane Integration: New Event Type & Context Structure
 ### New Dplane Operation Enum
@@ -471,82 +425,70 @@ struct dplane_rnh_info {
 ```
 
 ### Event Generation Workflow
+#### Reference implementation: `zebra_rnh_eval_nexthop_entry()`
+Insert the dplane NHT event generation at two specific points in `zebra/zebra_rnh.c::zebra_rnh_eval_nexthop_entry()`:
 
-#### `copy_state()` Fix: Preserve NHE ID
+1. **Capture previous state at the very top of the function**, before `zebra_rnh_remove_from_routing_table()` runs and before any branch that calls `copy_state()`. Reading `rnh->resolved_nhg_id` and `rnh->resolved_route` here guarantees we observe the pre-update values.
+2. **Fire `dplane_nht_event_update()` only when `state_changed` is true**, nested inside the existing `if (state_changed || force)` block. A `force`-only re-evaluation does not represent an actual change in resolution, so no NHT event is emitted in that case — fpmsyncd would have nothing actionable to do.
 
-The existing `copy_state()` call uses `zebra_nhe_copy(re->nhe, 0)`, which zeroes the NHE ID in the cached state. This breaks `prev_nhg_id` caching — when `zebra_rnh_eval_nexthop_entry()` reads `rnh->state->nhe->id` before `copy_state()`, it gets 0 instead of the actual previous NHG ID.
+```diff
+diff --git a/zebra/zebra_rnh.c b/zebra/zebra_rnh.c
+@@ -34,6 +34,7 @@
+ #include "zebra/zebra_srte.h"
+ #include "zebra/interface.h"
+ #include "zebra/zebra_errors.h"
++#include "zebra/zebra_dplane.h"
 
-**Fix**: Change to `zebra_nhe_copy(re->nhe, re->nhe->id)` to preserve the NHE ID in the copy.
+ DEFINE_MTYPE_STATIC(ZEBRA, RNH, "Nexthop tracking object");
 
-#### NHT Event Generation in `zebra_rnh_eval_nexthop_entry()`
+@@ -660,6 +661,12 @@ static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
+ 					 struct route_entry *re)
+ {
+ 	int state_changed = 0;
++	uint32_t prev_nhg_id;
++	struct prefix prev_resolved;
++
++	/* Cache previous state BEFORE copy_state() updates rnh. */
++	prev_nhg_id = rnh->resolved_nhg_id;
++	prefix_copy(&prev_resolved, &rnh->resolved_route);
 
-**Signature change**: Add a `bool route_entry_queued` parameter to the function:
-```c
-static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
-					 int force, struct route_node *nrn,
-					 struct rnh *rnh,
-					 struct route_node *prn,
-					 struct route_entry *re,
-					 bool route_entry_queued)
+ 	/* If we're resolving over a different route, resolution has changed or
+ 	 * the resolving route has some change (e.g., metric), there is a state
+@@ -695,6 +702,28 @@ static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
+ 	zebra_rnh_store_in_routing_table(rnh);
+
+ 	if (state_changed || force) {
++		/* Generate NHT dplane event for FPM consumers.
++		 * Only emit when the resolution actually changed; a force
++		 * re-evaluation by itself does not need an event.
++		 */
++		if (state_changed) {
++			struct prefix curr_resolved;
++			uint32_t curr_nhg_id;
++			enum zebra_dplane_result dplane_res;
++
++			prefix_copy(&curr_resolved, &rnh->resolved_route);
++			curr_nhg_id = rnh->resolved_nhg_id;
++
++			if (IS_ZEBRA_DEBUG_NHT)
++				zlog_debug("NHT event: rnh=%pFX prev_nhg=%u curr_nhg=%u",
++					   &nrn->p, prev_nhg_id, curr_nhg_id);
++
++			dplane_res = dplane_nht_event_update(
++				&nrn->p, &prev_resolved, prev_nhg_id,
++				&curr_resolved, curr_nhg_id);
++			if (dplane_res != ZEBRA_DPLANE_REQUEST_QUEUED)
++				zlog_warn("NHT event enqueue failed for rnh=%pFX: result=%d",
++					  &nrn->p, dplane_res);
++		}
++
+ 		/* NOTE: Use the "copy" of resolving route stored in 'rnh' i.e.,
+ 		 * rnh->state.
+ 		 */
 ```
 
-The caller `zebra_rnh_evaluate_entry()` passes the `route_entry_queued` value obtained from `zebra_rnh_resolve_nexthop_entry()`.
+Order of operations inside the function (top to bottom): capture prev state → `zebra_rnh_remove_from_routing_table()` → branch on `prefix_same`/`compare_state` (each of which may call `copy_state()` and set `state_changed = 1`) → `zebra_rnh_store_in_routing_table()` → enter `if (state_changed || force)` block → emit dplane event when `state_changed` → notify protocol clients → process pseudowires.
 
-#### Signature change for `zebra_rnh_resolve_nexthop_entry()`
-
-Add a `bool *route_entry_queued` output parameter to signal when resolution failed only because all candidate routes are queued (not truly unresolved):
-
-```c
-static struct route_entry *
-zebra_rnh_resolve_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
-				struct route_node *nrn, const struct rnh *rnh,
-				struct route_node **prn, bool *route_entry_queued)
-```
-
-**Why**: When SONiC runs with `--asic-offload=notify_on_offload`, a route can be SELECTED but still QUEUED (awaiting ASIC offload confirmation). In this window, `zebra_rnh_resolve_nexthop_entry()` returns NULL (no valid RE found), which looks like the nexthop became unresolved. Without this signal, the NHT event would tell FPM the nexthop is gone — triggering unnecessary PIC convergence and traffic loss for a transient state that will self-resolve once the ASIC offload notification arrives.
-
-**Implementation**:
-- Add two local flags: `bool saw_selected = false` and `bool saw_queued = false`
-- Initialize output: `if (route_entry_queued) *route_entry_queued = false`
-- When iterating route entries, set `saw_selected = true` when a RE passes the SELECTED/FIB_OVERRIDE check
-- When a selected RE is skipped due to `ROUTE_ENTRY_QUEUED`, set `saw_queued = true` and continue
-- At the end (no valid RE found): set `*route_entry_queued = true` if both `saw_selected && saw_queued`
-
-This allows `zebra_rnh_eval_nexthop_entry()` to suppress the NHT dplane event while still allowing the rest of the evaluation (client notifications, pseudowire processing) to proceed normally.
-
-Before any state mutation (before `copy_state()` is called), cache the previous state as primitive values:
-```c
-uint32_t prev_nhg_id = (rnh->state && rnh->state->nhe)
-                        ? rnh->state->nhe->id : 0;
-struct prefix prev_resolved;
-prefix_copy(&prev_resolved, &rnh->resolved_route);
-```
-
-After state change detection (`state_changed || force`), generate the NHT dplane event — gated by both `state_changed` and `!route_entry_queued`:
-```c
-if (state_changed && !route_entry_queued) {
-    struct prefix curr_resolved;
-    uint32_t curr_nhg_id;
-    enum zebra_dplane_result dplane_res;
-
-    prefix_copy(&curr_resolved, &rnh->resolved_route);
-    curr_nhg_id = (rnh->state && rnh->state->nhe)
-                  ? rnh->state->nhe->id : 0;
-
-    if (IS_ZEBRA_DEBUG_NHT)
-        zlog_debug("NHT event: rnh=%pFX prev_nhg=%u curr_nhg=%u",
-                   &nrn->p, prev_nhg_id, curr_nhg_id);
-
-    dplane_res = dplane_nht_event_update(
-        &nrn->p, &prev_resolved, prev_nhg_id,
-        &curr_resolved, curr_nhg_id);
-    if (dplane_res != ZEBRA_DPLANE_REQUEST_QUEUED)
-        zlog_warn("NHT event enqueue failed for rnh=%pFX: result=%d",
-                  &nrn->p, dplane_res);
-}
-```
-
-Client notifications and pseudowire processing follow unconditionally (same as before).
 
 #### `dplane_nht_event_update()` Function
 
@@ -593,16 +535,165 @@ Each accessor calls `DPLANE_CTX_VALID(ctx)` and reads from `ctx->u.rnh_info`.
 | `zebra/kernel_socket.c` | `kernel_update_multi()` | Log error + set failure (not a kernel op) |
 | `zebra/zebra_script.c` | Lua dplane ctx push | `break` (no Lua binding) |
 
-#### `zebra_rnh_clear_nhc_flag()` Update
-
-This function also calls `zebra_rnh_resolve_nexthop_entry()`. Pass `NULL` for the `route_entry_queued` parameter since it doesn't need suppression information:
-```c
-re = zebra_rnh_resolve_nexthop_entry(zvrf, afi, nrn, rnh, &prn, NULL);
-```
-
 #### Include Dependency
 
 Add `#include "zebra/zebra_dplane.h"` to `zebra/zebra_rnh.c` for the `dplane_nht_event_update()` declaration and `enum zebra_dplane_result` type.
+
+## Triggering `REINSTALL_FPM_ONLY` for in-flight and KEEP_AROUND-revival cases
+
+`NEXTHOP_GROUP_REINSTALL_FPM_ONLY` is the flag that tells the FPM-only fast path to re-emit an NHG to fpmsyncd without doing a kernel install. Two corner cases need explicit handling in `zebra/zebra_nhg.c` so the flag actually causes a re-install when the NHG eventually settles:
+
+### Setting `REINSTALL_FPM_ONLY` at the right level (parent NHG, not inserted child)
+
+The flag was originally being set inside the low-level RB-tree helpers `nhg_connected_tree_add_nhe()` / `nhg_connected_tree_del_nhe()`, but on the wrong NHE: those helpers operate on a node being inserted into / removed from a tree, and the existing code marked the *inserted* NHE (`depend`) with `REINSTALL_FPM_ONLY`. The intent, however, is to re-emit the **tree owner** (the parent NHG whose dependents list just changed) — not the child. The fix is to remove the SET_FLAG from the tree primitives and move it up one level into the `zebra_nhg_dependents_add()` / `zebra_nhg_dependents_del()` callers, which know which NHE owns the dependents tree.
+
+The same hunk also widens the gate from "parent is INSTALLED" to "parent is INSTALLED **or** QUEUED". Without QUEUED in the gate, a dependent change that arrives while the parent's install is still in flight would silently fail to set the flag, and Case A (below) would have nothing to consume.
+
+```diff
+diff --git a/zebra/zebra_nhg.c b/zebra/zebra_nhg.c
+@@ -158,13 +158,6 @@ nhg_connected_tree_del_nhe(struct nhg_connected_tree_head *head,
+ 	if (remove) {
+ 		removed_nhe = remove->nhe;
+ 		nhg_connected_free(remove);
+-		/*
+-		 * If nhg fib is enabled, we need to reinstall this nhg due to depends or dependents information
+-		 * is updated.
+-		 */
+-		if (zebra_nhg_fib_enabled && CHECK_FLAG(depend->flags, NEXTHOP_GROUP_INSTALLED)) {
+-			SET_FLAG(depend->flags, NEXTHOP_GROUP_REINSTALL_FPM_ONLY);
+-		}
+ 		return removed_nhe;
+ 	}
+
+@@ -186,13 +179,6 @@ nhg_connected_tree_add_nhe(struct nhg_connected_tree_head *head,
+ 	 * RB code.
+ 	 */
+ 	if (new && (nhg_connected_tree_add(head, new) == NULL)) {
+-		/*
+-		 * If nhg fib is enabled, we need to reinstall this nhg due to depends or dependents information
+-		 * is updated
+-		 */
+-		if (zebra_nhg_fib_enabled && CHECK_FLAG(depend->flags, NEXTHOP_GROUP_INSTALLED)) {
+-			SET_FLAG(depend->flags, NEXTHOP_GROUP_REINSTALL_FPM_ONLY);
+-		}
+ 		return NULL;
+ 	}
+
+@@ -271,12 +257,38 @@ static void zebra_nhg_dependents_del(struct nhg_hash_entry *from,
+ 				     struct nhg_hash_entry *dependent)
+ {
+ 	nhg_connected_tree_del_nhe(&from->nhg_dependents, dependent);
++
++	/*
++	 * If nhg fib is enabled and the tree owner is already installed
++	 * (or its install is in flight), reinstall it so FPM gets the
++	 * updated dependents list. The QUEUED case is handled at install
++	 * completion: after INSTALLED is set, the dplane callback will
++	 * see REINSTALL_FPM_ONLY and trigger another install.
++	 */
++	if (zebra_nhg_fib_enabled &&
++	    (CHECK_FLAG(from->flags, NEXTHOP_GROUP_INSTALLED) ||
++	     CHECK_FLAG(from->flags, NEXTHOP_GROUP_QUEUED))) {
++		SET_FLAG(from->flags, NEXTHOP_GROUP_REINSTALL_FPM_ONLY);
++	}
+ }
+
+ static void zebra_nhg_dependents_add(struct nhg_hash_entry *to,
+ 				     struct nhg_hash_entry *dependent)
+ {
+ 	nhg_connected_tree_add_nhe(&to->nhg_dependents, dependent);
++
++	/*
++	 * If nhg fib is enabled and the tree owner is already installed
++	 * (or its install is in flight), reinstall it so FPM gets the
++	 * updated dependents list. The QUEUED case is handled at install
++	 * completion: after INSTALLED is set, the dplane callback will
++	 * see REINSTALL_FPM_ONLY and trigger another install.
++	 */
++	if (zebra_nhg_fib_enabled &&
++	    (CHECK_FLAG(to->flags, NEXTHOP_GROUP_INSTALLED) ||
++	     CHECK_FLAG(to->flags, NEXTHOP_GROUP_QUEUED))) {
++		SET_FLAG(to->flags, NEXTHOP_GROUP_REINSTALL_FPM_ONLY);
++	}
+ }
+```
+
+After this, the flag is reliably set on the correct NHG whenever its dependents list changes and it is either fully installed or has an install in flight. Cases A and B below cover the two consumers of that flag.
+
+### Case A: dependents change while an install is in flight (QUEUED)
+
+If a dependent NHG is added or removed while the parent NHG is still in the QUEUED state (install dispatched to dplane but not yet acknowledged), setting `REINSTALL_FPM_ONLY` alone is not enough — the parent's own install completion path must observe the flag and trigger another install. Without this, FPM would never see the updated dependents list.
+
+In `zebra_nhg_dplane_result()`, after the install succeeds and the QUEUED bit has been cleared and INSTALLED bit set, check `REINSTALL_FPM_ONLY` and re-invoke `zebra_nhg_install_kernel()`:
+
+```diff
+diff --git a/zebra/zebra_nhg.c b/zebra/zebra_nhg.c
+@@ -3900,6 +3937,20 @@ void zebra_nhg_dplane_result(struct zebra_dplane_ctx *ctx)
+ 				zsend_nhg_notify(nhe->type, nhe->zapi_instance,
+ 						 nhe->zapi_session, nhe->id,
+ 						 ZAPI_NHG_INSTALLED);
++
++			/*
++			 * If REINSTALL_FPM_ONLY was set while this install was
++			 * in flight (e.g. a dependent was added/removed while
++			 * QUEUED), trigger another install now so FPM sees the
++			 * updated dependents list. QUEUED is already cleared
++			 * and INSTALLED is now set, so the install condition in
++			 * zebra_nhg_install_kernel() will fire on the
++			 * REINSTALL_FPM_ONLY branch.
++			 */
++			if (zebra_nhg_fib_enabled &&
++			    CHECK_FLAG(nhe->flags,
++				       NEXTHOP_GROUP_REINSTALL_FPM_ONLY))
++				zebra_nhg_install_kernel(nhe, ZEBRA_ROUTE_MAX);
+ 			break;
+ 		case ZEBRA_DPLANE_REQUEST_FAILURE:
+```
+
+This pairs with the existing `dependents_add` / `dependents_del` setters that mark the parent with `REINSTALL_FPM_ONLY` when the parent is either INSTALLED or QUEUED — the QUEUED branch is now actually serviced.
+
+### Case B: NHG revived from KEEP_AROUND (delayed-delete)
+
+When an NHG's refcnt drops to zero, zebra schedules it for deletion via the `KEEP_AROUND` timer rather than freeing it immediately. If something references the NHG again before the timer fires, `zebra_nhg_increment_ref()` cancels the timer and clears `KEEP_AROUND`. From the kernel's perspective the NHG was never deleted (the kernel install is still live), but FPM/SONiC needs an explicit re-notification so the SAI / PIC layers re-create their per-group state.
+
+Mark the NHG and all its direct depends with `REINSTALL_FPM_ONLY` at the moment it's revived:
+
+```diff
+diff --git a/zebra/zebra_nhg.c b/zebra/zebra_nhg.c
+@@ -1842,6 +1854,20 @@ void zebra_nhg_increment_ref(struct nhg_hash_entry *nhe)
+ 		event_cancel(&nhe->timer);
+ 		nhe->refcnt--;
+ 		UNSET_FLAG(nhe->flags, NEXTHOP_GROUP_KEEP_AROUND);
++		/* NHG is already installed in kernel but FPM/SONiC needs
++		 * re-notification for PIC HW update since the NHG was
++		 * previously marked for deletion.
++		 */
++		if (zebra_nhg_fib_enabled) {
++			struct nhg_connected *rb_node_dep = NULL;
++
++			SET_FLAG(nhe->flags, NEXTHOP_GROUP_REINSTALL_FPM_ONLY);
++			frr_each(nhg_connected_tree, &nhe->nhg_depends,
++				 rb_node_dep) {
++				SET_FLAG(rb_node_dep->nhe->flags,
++					 NEXTHOP_GROUP_REINSTALL_FPM_ONLY);
++			}
++		}
+ 	}
+
+ 	if (!zebra_nhg_depends_is_empty(nhe))
+```
+
+The flag is propagated to direct depends because PIC convergence needs each member group re-notified — a parent-only re-emit would leave the leaf groups absent from the FPM-side cache.
+
+### Summary
+
+Together, the producer hunk and the two consumer hunks close every window where `REINSTALL_FPM_ONLY` would otherwise be a no-op:
+
+| Role | Hunk | Resolution |
+|:---|:---|:---|
+| Producer | `zebra_nhg_dependents_{add,del}()` | Sets the flag on the **parent** NHG when its dependents list changes and it is INSTALLED or QUEUED |
+| Consumer (Case A) | `zebra_nhg_dplane_result()` | Consumes the flag on REQUEST_SUCCESS and re-dispatches the install so FPM sees the new dependents list |
+| Consumer (Case B) | `zebra_nhg_increment_ref()` | Sets the flag on the NHG and its depends when it is revived from KEEP_AROUND, so FPM re-receives the (still-kernel-installed) group |
 
 # 4. FPM Message Serialization (SONiC Integration)
 
@@ -1151,9 +1242,9 @@ Locates the starting RIBNHGEntries for the global table context and triggers a b
 ### Part 2: VPN Context Backwalk
 Uses the incoming nexthop address to locate all `RIBHNGEntry` instances that reference it across different VPN contexts. The function iterates through each matching entry and triggers a backwalk from that node to update the corresponding SONiC NHGs.
 
-**Note**: 
+**Note**:
 1. Currently, backwalks are not initiated using the original NHG ID. This capability may be introduced in future updates once specific use cases are validated.
-2. Since these NHG have VPN contexts, we can't use part 1's walk to reach these nodes. 
+2. Since these NHG have VPN contexts, we can't use part 1's walk to reach these nodes.
 
 ## `fib_nhg_back_walk()`
 This function provides a generalized backwalk infrastructure within the `RIBNHGTable` class, enabling traversal across all managed `RIBNHGEntry` objects.
@@ -1243,14 +1334,14 @@ Need to add a new string field `m_gateway` to store NHG's gateway address in sin
          */
         string m_gateway = "";
 ```
-Need to create an accessing api for this m_gateway. It would be used during convergence backwalk. 
+Need to create an accessing api for this m_gateway. It would be used during convergence backwalk.
 ```
 string RIBNHGEntry::getGatewayAddress() {
     return m_gateway;
 }
 ```
 
-This field is populated from nexthopgroupfull's gate field, when its type is specified, a.k.a recursive or single path case. 
+This field is populated from nexthopgroupfull's gate field, when its type is specified, a.k.a recursive or single path case.
 ```
     if (nhg.type == fib::NEXTHOP_TYPE_IPV6 || nhg.type == fib::NEXTHOP_TYPE_IPV6_IFINDEX ||
         nhg.type == fib::NEXTHOP_TYPE_IPV4 || nhg.type == fib::NEXTHOP_TYPE_IPV4_IFINDEX) {
@@ -1791,7 +1882,7 @@ sequenceDiagram
 ```
 
 ### One variation for part 1
-In the following example, 2064:100::1d points NHG 235, which points to NHG 232 and 236. Both NHG 232 and 236's nexthop is /128 prefix. 
+In the following example, 2064:100::1d points NHG 235, which points to NHG 232 and 236. Both NHG 232 and 236's nexthop is /128 prefix.
 
 ```
 PE3# show ipv6 route 2064:100::1d next
@@ -1862,9 +1953,9 @@ ID: 210 (zebra)
      Valid, Installed, Initial Delay
      Interface Index: 140
            is directly connected, Ethernet12 (vrf default), weight 1
-PE3# 
+PE3#
 ```
-So their NHT would be via connected routes' NHG instead of ARP/ND learnt routes' NHG. This would lead NHG look up fail in part one. 
+So their NHT would be via connected routes' NHG instead of ARP/ND learnt routes' NHG. This would lead NHG look up fail in part one.
 ```
 fc06::2(Connected)
  resolved via connected, prefix fc06::/120
@@ -2258,7 +2349,7 @@ Above graph could be presented as the following table
 
 **Entry point resolution**: `getEntry(210)` returns nullptr (NHG 210 is a connected-route NHG, not in our RIBNHGEntry table). Fallback: `getGlobalEntries("fc06::2")` returns {NHG 235} (leaf, gateway fc06::2).
 
-**DFS order from 235:** `235 → 236 → 260 → 263 → 264 → 263 (revisit) → 266 → 269`  
+**DFS order from 235:** `235 → 236 → 260 → 263 → 264 → 263 (revisit) → 266 → 269`
 *(270, 232 never reached -- not in backwalk path from 235)*
 
 1. **235** (STARTING, leaf `fc06::2`):
@@ -2341,7 +2432,7 @@ FIB triggers `fib_nhg_back_walk(260, ctx)`.
 1. **263** (STARTING): No gateway match. `modified_set` empty.
    - Continue to dependents of 263 → NONE. Backwalk ends.
 
-- **Nothing updated.** 
+- **Nothing updated.**
 
 **Call flow trace**:
 
@@ -2555,7 +2646,7 @@ Part 2 (VPN Context): Lookup fc06::2 in `m_nexthop_to_vrf_RIBNHG` -> **no match*
     2. **239** (ECMP, depends `[240, 241]`):
         -  `240` in `modified_set`.
         - `240` fully disabled → mark: `{241: true, 240: false}`.
-        - Update SONiC NHG from node 239: `{2064:200::1e}`. APPDB written. `modified_set += 239`.  
+        - Update SONiC NHG from node 239: `{2064:200::1e}`. APPDB written. `modified_set += 239`.
 
 **Call flow trace**:
 
@@ -2922,12 +3013,12 @@ def apply_config_cmmds_to_vtysh(nbrhost, cmd_list):
 A util function to collect a given database's entries into a JSON file on the DUT.
 
 Inputs:
-* duthost: the device to run to collect redis db entries. 
+* duthost: the device to run to collect redis db entries.
 * testcase_name: test case name
 * db_name: database name, used to find out redis db port and instance
 * collecting_prefix: the collecting entries' prefix (e.g., `"NEXTHOP_GROUP_TABLE"`).
 
-First, we use db_name to find out redis db port and instance. In current phrase, we only support two db instances with hardcoded value approach. 
+First, we use db_name to find out redis db port and instance. In current phrase, we only support two db instances with hardcoded value approach.
 
 ```python
     # 1. Determine Redis credentials
@@ -3262,7 +3353,7 @@ TOPO2_STATIC_ROUTES_REMOVE = [
 
 #### Common Test Pattern
 
-All 6 test cases follow a shared structure. 
+All 6 test cases follow a shared structure.
 Note: for IGP fail case, due to current BGP implementation, we can't achieve all PIC NHG handled before service routes a.k.a vrf routes in this case.
 
 **Local, IGP and BGP failure tests** (`test_failed` flag pattern):
@@ -3566,7 +3657,7 @@ Update the design specification to explicitly forbid caching route_entry pointer
 We need to analyze why this memory lifecycle detail was missed during the code generation. If LLM-assisted development requires the spec to explicitly describe every low-level memory management constraint, it implies that spec authors must possess deep implementation-level knowledge. We need to determine if this level of granularity is sustainable for future developing.
 
 ###  Misunderstand m_nexthop
-LLM misunderstood m_nexthop's meaning and created the following API for getting NHG's gateway address 
+LLM misunderstood m_nexthop's meaning and created the following API for getting NHG's gateway address
 ```
 string RIBNHGEntry::getGatewayAddress() {
     return m_nexthop;
@@ -3594,7 +3685,7 @@ Then use this api in the following walk spec, which is not correct.
     }
 ```
 **Resolution**:
-The fix is to update this LLD spec to add `m_gateway` field explictly. 
+The fix is to update this LLD spec to add `m_gateway` field explictly.
 
 ###  Not handle IBNHGEntry::getNextHopGroupFields()'s change paths based on m_resolved_enable_group
 ```
