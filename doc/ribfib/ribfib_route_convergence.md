@@ -7,10 +7,10 @@
   - [2. Header Include Paths: Export vs. Internal Files](#2-header-include-paths-export-vs-internal-files)
 - [3. FRR Modifications](#3-frr-modifications)
   - [Some Common FRR changes](#some-common-frr-changes)
-    - [Queued-route filter relaxation in `zebra_rnh_resolve_nexthop_entry()`](#queued-route-filter-relaxation-in-zebra_rnh_resolve_nexthop_entry)
-    - [`copy_state()` Fix: Preserve NHE ID](#copy_state-fix-preserve-nhe-id)
-    - [Tolerating `ENOENT` / `ESRCH` on `RTM_DELNEXTHOP` in `netlink_parse_error()`](#tolerating-enoent--esrch-on-rtm_delnexthop-in-netlink_parse_error)
-    - [Skipping inactive singleton members in `zebra_nhg_nhe2grp_internal()`](#skipping-inactive-singleton-members-in-zebra_nhg_nhe2grp_internal)
+    - [FRR PR 22221 : Queued-route filter relaxation in `zebra_rnh_resolve_nexthop_entry()`](#frr-pr-22221--queued-route-filter-relaxation-in-zebra_rnh_resolve_nexthop_entry)
+    - [FRR PR 21892 : `copy_state()` preserves NHE ID](#frr-pr-21892--copy_state-preserves-nhe-id)
+    - [FRR PR TODO : Tolerating `ENOENT` / `ESRCH` on `RTM_DELNEXTHOP` in `netlink_parse_error()`](#frr-pr-todo--tolerating-enoent--esrch-on-rtm_delnexthop-in-netlink_parse_error)
+    - [FRR PR  : zebra: Send enough NHG information to dplane to support RIB/FIB](#frr-pr---zebra-send-enough-nhg-information-to-dplane-to-support-ribfib)
   - [RNH event information](#rnh-event-information)
     - [Core RNH Tracking Fields](#core-rnh-tracking-fields)
     - [Change Detection Logic](#change-detection-logic)
@@ -24,11 +24,8 @@
       - [Accessor Functions](#accessor-functions)
       - [Boilerplate Switch Cases](#boilerplate-switch-cases)
       - [Include Dependency](#include-dependency)
-  - [Triggering `REINSTALL_FPM_ONLY` for in-flight and KEEP\_AROUND-revival cases](#triggering-reinstall_fpm_only-for-in-flight-and-keep_around-revival-cases)
-    - [Setting `REINSTALL_FPM_ONLY` at the right level (parent NHG, not inserted child)](#setting-reinstall_fpm_only-at-the-right-level-parent-nhg-not-inserted-child)
-    - [Case A: dependents change while an install is in flight (QUEUED)](#case-a-dependents-change-while-an-install-is-in-flight-queued)
-    - [Case B: NHG revived from KEEP\_AROUND (delayed-delete)](#case-b-nhg-revived-from-keep_around-delayed-delete)
-    - [Summary](#summary)
+    - [Dependents change while an install is in flight (QUEUED)](#dependents-change-while-an-install-is-in-flight-queued)
+    - [NHG revived from KEEP\_AROUND (delayed-delete)](#nhg-revived-from-keep_around-delayed-delete)
 - [4. FPM Message Serialization (SONiC Integration)](#4-fpm-message-serialization-sonic-integration)
   - [Include Dependency](#include-dependency-1)
   - [Custom Message Type](#custom-message-type)
@@ -219,7 +216,7 @@ Critical: Mixing these styles causes build failures:
 This section outlines modifications to FRRouting (FRR) to enhance Next Hop Tracking (NHT) event propagation from Zebra to the dplane, enabling fpmsyncd to respond proactively to nexthop changes and minimize traffic loss during convergence.
 
 ## Some Common FRR changes
-### Queued-route filter relaxation in `zebra_rnh_resolve_nexthop_entry()`
+### FRR PR 22221 : Queued-route filter relaxation in `zebra_rnh_resolve_nexthop_entry()`
 
 This relaxation has been accepted upstream as FRR PR 22221 ("zebra: Allow rnh evaluation for a queued and !installed rn", merged 2026-06-05): https://github.com/FRRouting/frr/pull/22221. It is no longer a SONiC-local patch; once that commit is in the FRR baseline this section is informational only.
 
@@ -238,7 +235,7 @@ Relax the filter so that only routes that are QUEUED **and not yet INSTALLED** a
 
 Without this change, an already-installed RE that gets re-queued (e.g. on metric change or recursive resolver flap) would be silently skipped by the resolver, `re` would be returned NULL, and the NHT event for the affected rnh would never be generated.
 
-### `copy_state()` Fix: Preserve NHE ID
+### FRR PR 21892 : `copy_state()` preserves NHE ID
 
 The existing `copy_state()` call uses `zebra_nhe_copy(re->nhe, 0)`, which zeroes the NHE ID in the cached state. This breaks `prev_nhg_id` caching — when `zebra_rnh_eval_nexthop_entry()` reads `rnh->state->nhe->id` before `copy_state()`, it gets 0 instead of the actual previous NHG ID.
 
@@ -285,9 +282,9 @@ diff --git a/zebra/zebra_rnh.c b/zebra/zebra_rnh.c
 
 Note: `state->nhe = zebra_nhe_copy(re->nhe, 0)` is left intact — the cached NHE retains id=0 by design to avoid id collisions on the cached copy. The real id is now carried on `rnh->resolved_nhg_id`, which is what NHT consumers (and the dplane event below) read.
 
-### Tolerating `ENOENT` / `ESRCH` on `RTM_DELNEXTHOP` in `netlink_parse_error()`
+### FRR PR TODO : Tolerating `ENOENT` / `ESRCH` on `RTM_DELNEXTHOP` in `netlink_parse_error()`
 
-The dplane runs providers in a chain (kernel → FPM → ...). When the kernel provider returns a hard failure for an NHG delete, zebra marks the ctx as failed and the FPM provider never gets to run. That breaks SONiC convergence in a specific scenario:
+The dplane runs providers in a chain (kernel → FPM → ...). When the kernel provider returns a hard failure for an NHG delete, zebra marks the ctx as failed and the FPM provider never gets to run. That breaks SONiC in a specific scenario:
 
 1. An interface goes down. The kernel auto-purges every NHG that recursively pointed through that interface.
 2. Zebra later issues `RTM_DELNEXTHOP` for those same NHGs as part of its own cleanup.
@@ -308,38 +305,81 @@ diff --git a/zebra/kernel_netlink.c b/zebra/kernel_netlink.c
  	       msg_type == RTM_GETTUNNEL) &&
  	      (-errnum == EOPNOTSUPP)))) {
 ```
+Rationale: the kernel having already removed the NHG is not a bug from zebra's perspective. The desired end-state (NHG absent from kernel) is achieved. What matters for SONiC is that the *FPM provider still runs* and emits the delete, so the rest of the stack can converge. The allowlist treats these two errnos as benign for `RTM_DELNEXTHOP` only; other RTM ops and other errnos continue to be flagged.
 
-Rationale: the kernel having already removed the NHG is not a bug from zebra's perspective — the desired end-state (NHG absent from kernel) is achieved. What matters for SONiC is that the *FPM provider still runs* and emits the delete, so the rest of the stack can converge. The allowlist treats these two errnos as benign for `RTM_DELNEXTHOP` only; other RTM ops and other errnos continue to be flagged.
+### FRR PR  : zebra: Send enough NHG information to dplane to support RIB/FIB
+In current FRR codes, depedents list updates would not be informed to dplane. But due to RIB/FIB's convergence handling, we need these information. Therefore, we add these NHG updates for `NEXTHOP_GROUP_REINSTALL_FPM_ONLY`.
 
-### Skipping inactive singleton members in `zebra_nhg_nhe2grp_internal()`
-
-When zebra builds the per-group dependent list to hand down to the dplane install path, every depend (singleton NHG) is appended unconditionally, including those whose underlying nexthop has gone inactive (e.g. interface down, recursive resolver lost). The kernel then rejects the entire group because one of its members is invalid, and the result is that SONiC sees a missing group rather than a group with the inactive member pruned.
-
-This is addressed upstream by FRR PR 22133 ("zebra: skip inactive nexthop when building NHG for kernel install", https://github.com/FRRouting/frr/pull/22133, currently open). The fix adds a per-depend `NEXTHOP_FLAG_ACTIVE` check before appending to the install array — inactive singletons are skipped so they don't poison the whole NHG programming, while the rest of the group still installs.
+`NEXTHOP_GROUP_REINSTALL_FPM_ONLY` is the flag that tells the FPM-only fast path to re-emit an NHG to fpmsyncd without doing a kernel install. We will only set this flag if the NHG add dependents `zebra_nhg_dependents_add`or delete dependents `zebra_nhg_dependents_del`, when it is either in NEXTHOP_GROUP_INSTALLED or in NEXTHOP_GROUP_QUEUED.
 
 ```diff
 diff --git a/zebra/zebra_nhg.c b/zebra/zebra_nhg.c
-@@ -3389,6 +3415,17 @@ static uint16_t zebra_nhg_nhe2grp_internal(struct nh_grp *grp, uint16_t curr_ind
- 				continue;
- 			}
+@@ -158,13 +158,6 @@ nhg_connected_tree_del_nhe(struct nhg_connected_tree_head *head,
+ 	if (remove) {
+ 		removed_nhe = remove->nhe;
+ 		nhg_connected_free(remove);
+-		/*
+-		 * If nhg fib is enabled, we need to reinstall this nhg due to depends or dependents information
+-		 * is updated.
+-		 */
+-		if (zebra_nhg_fib_enabled && CHECK_FLAG(depend->flags, NEXTHOP_GROUP_INSTALLED)) {
+-			SET_FLAG(depend->flags, NEXTHOP_GROUP_REINSTALL_FPM_ONLY);
+-		}
+ 		return removed_nhe;
+ 	}
 
-+			if (depend->nhg.nexthop &&
-+			    !CHECK_FLAG(depend->nhg.nexthop->flags,
-+					NEXTHOP_FLAG_ACTIVE)) {
-+				if (IS_ZEBRA_DEBUG_RIB_DETAILED
-+				    || IS_ZEBRA_DEBUG_NHG)
-+					zlog_debug(
-+						"%s: Nexthop ID (%u) is inactive, not appending to dataplane install group",
-+						__func__, depend->id);
-+				continue;
-+			}
+@@ -186,13 +179,6 @@ nhg_connected_tree_add_nhe(struct nhg_connected_tree_head *head,
+ 	 * RB code.
+ 	 */
+ 	if (new && (nhg_connected_tree_add(head, new) == NULL)) {
+-		/*
+-		 * If nhg fib is enabled, we need to reinstall this nhg due to depends or dependents information
+-		 * is updated
+-		 */
+-		if (zebra_nhg_fib_enabled && CHECK_FLAG(depend->flags, NEXTHOP_GROUP_INSTALLED)) {
+-			SET_FLAG(depend->flags, NEXTHOP_GROUP_REINSTALL_FPM_ONLY);
+-		}
+ 		return NULL;
+ 	}
+
+@@ -271,12 +257,38 @@ static void zebra_nhg_dependents_del(struct nhg_hash_entry *from,
+ 				     struct nhg_hash_entry *dependent)
+ {
+ 	nhg_connected_tree_del_nhe(&from->nhg_dependents, dependent);
 +
- 			/* Check for duplicate IDs, ignore if found. */
- 			for (int j = 0; j < i; j++) {
- 				if (depend->id == grp[j].id) {
-```
++	/*
++	 * If nhg fib is enabled and the tree owner is already installed
++	 * (or its install is in flight), reinstall it so FPM gets the
++	 * updated dependents list. The QUEUED case is handled at install
++	 * completion: after INSTALLED is set, the dplane callback will
++	 * see REINSTALL_FPM_ONLY and trigger another install.
++	 */
++	if (zebra_nhg_fib_enabled &&
++	    (CHECK_FLAG(from->flags, NEXTHOP_GROUP_INSTALLED) ||
++	     CHECK_FLAG(from->flags, NEXTHOP_GROUP_QUEUED))) {
++		SET_FLAG(from->flags, NEXTHOP_GROUP_REINSTALL_FPM_ONLY);
++	}
+ }
 
-Interaction with the rest of section 3: this skip happens at install-group assembly time, which runs *before* `zebra_nhg_dplane_result()` and the `REINSTALL_FPM_ONLY` consumer (Case A above). When the inactive depend later flips back to active — typically via NHT re-resolution — the parent NHG becomes a candidate for `REINSTALL_FPM_ONLY`, and the dplane-result path described earlier will re-emit the now-complete group to FPM. The two changes are complementary: PR 22133 prevents kernel-side rejection during the failure transient; the QUEUED-window handling ensures FPM converges back to the healthy state once the underlay recovers.
+ static void zebra_nhg_dependents_add(struct nhg_hash_entry *to,
+ 				     struct nhg_hash_entry *dependent)
+ {
+ 	nhg_connected_tree_add_nhe(&to->nhg_dependents, dependent);
++
++	/*
++	 * If nhg fib is enabled and the tree owner is already installed
++	 * (or its install is in flight), reinstall it so FPM gets the
++	 * updated dependents list. The QUEUED case is handled at install
++	 * completion: after INSTALLED is set, the dplane callback will
++	 * see REINSTALL_FPM_ONLY and trigger another install.
++	 */
++	if (zebra_nhg_fib_enabled &&
++	    (CHECK_FLAG(to->flags, NEXTHOP_GROUP_INSTALLED) ||
++	     CHECK_FLAG(to->flags, NEXTHOP_GROUP_QUEUED))) {
++		SET_FLAG(to->flags, NEXTHOP_GROUP_REINSTALL_FPM_ONLY);
++	}
+ }
+```
 
 ## RNH event information
 ### Core RNH Tracking Fields
@@ -356,6 +396,8 @@ The function copy_state() frees the existing resolution state (rnh->state) befor
 ❌ Do NOT cache rnh->state as a pointer before calling copy_state() and dereference it afterward. The pointer becomes dangling.
 ✅ DO extract and cache any required fields (e.g., nhg_id) before invoking copy_state(), since primitive values remain valid independent of memory lifecycle.
 
+We also preserve NHE ID via FRR PR 21892.
+
 ### Change Detection Logic
 The function zebra_rnh_eval_nexthop_entry() in https://github.com/FRRouting/frr/blob/master/zebra/zebra_rnh.c#L785 evaluates whether an incoming route update affects an RNH by comparing:
 * Whether the incoming route_node *prn matches the RNH's current resolved prefix
@@ -369,7 +411,7 @@ static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
 					 struct route_entry *re)
 ```
 
-When a state change is detected (state_changed == true), Zebra must propagate the following context to dplane to enable informed FIB NHT updates.
+When a state change is detected (state_changed == true), Zebra must propagate the following context to dplane to enable FIB NHT updates.
 
 The purpose for zebra sends NHT event to fpmsyncd is to give enough information which informs that the current nexthop its holding will make some changes. So fpmsyncd's FIB module could response this event properly for reducing traffic loss window. Therefore, the following information would need to pass down to dplane when state_changed is set.
 
@@ -539,88 +581,7 @@ Each accessor calls `DPLANE_CTX_VALID(ctx)` and reads from `ctx->u.rnh_info`.
 
 Add `#include "zebra/zebra_dplane.h"` to `zebra/zebra_rnh.c` for the `dplane_nht_event_update()` declaration and `enum zebra_dplane_result` type.
 
-## Triggering `REINSTALL_FPM_ONLY` for in-flight and KEEP_AROUND-revival cases
-
-`NEXTHOP_GROUP_REINSTALL_FPM_ONLY` is the flag that tells the FPM-only fast path to re-emit an NHG to fpmsyncd without doing a kernel install. Two corner cases need explicit handling in `zebra/zebra_nhg.c` so the flag actually causes a re-install when the NHG eventually settles:
-
-### Setting `REINSTALL_FPM_ONLY` at the right level (parent NHG, not inserted child)
-
-The flag was originally being set inside the low-level RB-tree helpers `nhg_connected_tree_add_nhe()` / `nhg_connected_tree_del_nhe()`, but on the wrong NHE: those helpers operate on a node being inserted into / removed from a tree, and the existing code marked the *inserted* NHE (`depend`) with `REINSTALL_FPM_ONLY`. The intent, however, is to re-emit the **tree owner** (the parent NHG whose dependents list just changed) — not the child. The fix is to remove the SET_FLAG from the tree primitives and move it up one level into the `zebra_nhg_dependents_add()` / `zebra_nhg_dependents_del()` callers, which know which NHE owns the dependents tree.
-
-The same hunk also widens the gate from "parent is INSTALLED" to "parent is INSTALLED **or** QUEUED". Without QUEUED in the gate, a dependent change that arrives while the parent's install is still in flight would silently fail to set the flag, and Case A (below) would have nothing to consume.
-
-```diff
-diff --git a/zebra/zebra_nhg.c b/zebra/zebra_nhg.c
-@@ -158,13 +158,6 @@ nhg_connected_tree_del_nhe(struct nhg_connected_tree_head *head,
- 	if (remove) {
- 		removed_nhe = remove->nhe;
- 		nhg_connected_free(remove);
--		/*
--		 * If nhg fib is enabled, we need to reinstall this nhg due to depends or dependents information
--		 * is updated.
--		 */
--		if (zebra_nhg_fib_enabled && CHECK_FLAG(depend->flags, NEXTHOP_GROUP_INSTALLED)) {
--			SET_FLAG(depend->flags, NEXTHOP_GROUP_REINSTALL_FPM_ONLY);
--		}
- 		return removed_nhe;
- 	}
-
-@@ -186,13 +179,6 @@ nhg_connected_tree_add_nhe(struct nhg_connected_tree_head *head,
- 	 * RB code.
- 	 */
- 	if (new && (nhg_connected_tree_add(head, new) == NULL)) {
--		/*
--		 * If nhg fib is enabled, we need to reinstall this nhg due to depends or dependents information
--		 * is updated
--		 */
--		if (zebra_nhg_fib_enabled && CHECK_FLAG(depend->flags, NEXTHOP_GROUP_INSTALLED)) {
--			SET_FLAG(depend->flags, NEXTHOP_GROUP_REINSTALL_FPM_ONLY);
--		}
- 		return NULL;
- 	}
-
-@@ -271,12 +257,38 @@ static void zebra_nhg_dependents_del(struct nhg_hash_entry *from,
- 				     struct nhg_hash_entry *dependent)
- {
- 	nhg_connected_tree_del_nhe(&from->nhg_dependents, dependent);
-+
-+	/*
-+	 * If nhg fib is enabled and the tree owner is already installed
-+	 * (or its install is in flight), reinstall it so FPM gets the
-+	 * updated dependents list. The QUEUED case is handled at install
-+	 * completion: after INSTALLED is set, the dplane callback will
-+	 * see REINSTALL_FPM_ONLY and trigger another install.
-+	 */
-+	if (zebra_nhg_fib_enabled &&
-+	    (CHECK_FLAG(from->flags, NEXTHOP_GROUP_INSTALLED) ||
-+	     CHECK_FLAG(from->flags, NEXTHOP_GROUP_QUEUED))) {
-+		SET_FLAG(from->flags, NEXTHOP_GROUP_REINSTALL_FPM_ONLY);
-+	}
- }
-
- static void zebra_nhg_dependents_add(struct nhg_hash_entry *to,
- 				     struct nhg_hash_entry *dependent)
- {
- 	nhg_connected_tree_add_nhe(&to->nhg_dependents, dependent);
-+
-+	/*
-+	 * If nhg fib is enabled and the tree owner is already installed
-+	 * (or its install is in flight), reinstall it so FPM gets the
-+	 * updated dependents list. The QUEUED case is handled at install
-+	 * completion: after INSTALLED is set, the dplane callback will
-+	 * see REINSTALL_FPM_ONLY and trigger another install.
-+	 */
-+	if (zebra_nhg_fib_enabled &&
-+	    (CHECK_FLAG(to->flags, NEXTHOP_GROUP_INSTALLED) ||
-+	     CHECK_FLAG(to->flags, NEXTHOP_GROUP_QUEUED))) {
-+		SET_FLAG(to->flags, NEXTHOP_GROUP_REINSTALL_FPM_ONLY);
-+	}
- }
-```
-
-After this, the flag is reliably set on the correct NHG whenever its dependents list changes and it is either fully installed or has an install in flight. Cases A and B below cover the two consumers of that flag.
-
-### Case A: dependents change while an install is in flight (QUEUED)
+### Dependents change while an install is in flight (QUEUED)
 
 If a dependent NHG is added or removed while the parent NHG is still in the QUEUED state (install dispatched to dplane but not yet acknowledged), setting `REINSTALL_FPM_ONLY` alone is not enough — the parent's own install completion path must observe the flag and trigger another install. Without this, FPM would never see the updated dependents list.
 
@@ -652,7 +613,7 @@ diff --git a/zebra/zebra_nhg.c b/zebra/zebra_nhg.c
 
 This pairs with the existing `dependents_add` / `dependents_del` setters that mark the parent with `REINSTALL_FPM_ONLY` when the parent is either INSTALLED or QUEUED — the QUEUED branch is now actually serviced.
 
-### Case B: NHG revived from KEEP_AROUND (delayed-delete)
+### NHG revived from KEEP_AROUND (delayed-delete)
 
 When an NHG's refcnt drops to zero, zebra schedules it for deletion via the `KEEP_AROUND` timer rather than freeing it immediately. If something references the NHG again before the timer fires, `zebra_nhg_increment_ref()` cancels the timer and clears `KEEP_AROUND`. From the kernel's perspective the NHG was never deleted (the kernel install is still live), but FPM/SONiC needs an explicit re-notification so the SAI / PIC layers re-create their per-group state.
 
@@ -683,17 +644,8 @@ diff --git a/zebra/zebra_nhg.c b/zebra/zebra_nhg.c
  	if (!zebra_nhg_depends_is_empty(nhe))
 ```
 
-The flag is propagated to direct depends because PIC convergence needs each member group re-notified — a parent-only re-emit would leave the leaf groups absent from the FPM-side cache.
+The flag is propagated to direct depends because PIC convergence needs each member group re-notified. A parent-only re-emit would leave the leaf groups absent from the FPM-side cache.
 
-### Summary
-
-Together, the producer hunk and the two consumer hunks close every window where `REINSTALL_FPM_ONLY` would otherwise be a no-op:
-
-| Role | Hunk | Resolution |
-|:---|:---|:---|
-| Producer | `zebra_nhg_dependents_{add,del}()` | Sets the flag on the **parent** NHG when its dependents list changes and it is INSTALLED or QUEUED |
-| Consumer (Case A) | `zebra_nhg_dplane_result()` | Consumes the flag on REQUEST_SUCCESS and re-dispatches the install so FPM sees the new dependents list |
-| Consumer (Case B) | `zebra_nhg_increment_ref()` | Sets the flag on the NHG and its depends when it is revived from KEEP_AROUND, so FPM re-receives the (still-kernel-installed) group |
 
 # 4. FPM Message Serialization (SONiC Integration)
 
