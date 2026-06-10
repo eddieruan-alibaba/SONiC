@@ -3343,13 +3343,13 @@ def verify_pic_nhg_switch(duthost, testcase_name, backup_nexthop, trigger_ts=Non
 
 #### 13. `wait_for_vrf_route_recursive_paths(duthost, vrf, prefix, expected_nexthops, ...)`
 
-Poll `show ip route vrf <vrf> <prefix>` until all expected recursive nexthops appear, with automatic rekick logic to recover from wedged BGP sessions.
+Poll `show ip route vrf <vrf> <prefix>` until all expected recursive nexthops appear, with automatic rekick logic and hard-reset escalation to recover from wedged BGP sessions.
 
 **Signature**:
 ```python
 def wait_for_vrf_route_recursive_paths(duthost, vrf, prefix, expected_nexthops,
                                        poll_interval=10, timeout=100,
-                                       rekick_after=30, rekick_interval=120,
+                                       rekick_after=30, rekick_interval=60,
                                        max_rekicks=3,
                                        remote_host=None,
                                        remote_clear_target=None):
@@ -3363,8 +3363,8 @@ def wait_for_vrf_route_recursive_paths(duthost, vrf, prefix, expected_nexthops,
 * poll_interval: seconds between retries (switches to 30s after rekick phase starts)
 * timeout: total seconds to wait before failing
 * rekick_after: if a nexthop is still missing after this many seconds, issue `clear bgp <nh>` for that neighbor
-* rekick_interval: seconds between successive rekick attempts for the same neighbor
-* max_rekicks: maximum number of clear bgp attempts per nexthop
+* rekick_interval: seconds between successive rekick attempts for the same neighbor (default 60s)
+* max_rekicks: maximum number of soft `clear bgp` attempts per nexthop (default 3)
 * remote_host: optional remote peer host. When set, each rekick also issues `clear bgp <remote_clear_target>` on this host. Required for eBGP-multihop VPN sessions where the remote outgoing TCP socket can wedge in Connect/Active and a local-side clear alone cannot unstick it.
 * remote_clear_target: BGP neighbor IP to clear on `remote_host` (e.g. the local DUT's loopback as seen by the remote peer)
 
@@ -3376,10 +3376,36 @@ def wait_for_vrf_route_recursive_paths(duthost, vrf, prefix, expected_nexthops,
    * If reachable, issue `vtysh -c 'clear bgp {nh}'` on DUT.
    * If `remote_host` is provided, also issue `vtysh -c 'clear bgp {remote_clear_target}'` on the remote host.
    * Respect `rekick_interval` between successive attempts and `max_rekicks` cap per nexthop.
-4. Switch to 30s poll interval during rekick phase.
-5. On timeout, fail with `pytest_assert` reporting which nexthops are still missing.
+4. **Hard-reset escalation**: After `max_rekicks` soft attempts are exhausted for a nexthop, if `remote_host` is provided, escalate to `neighbor shutdown` / `no neighbor shutdown` on the remote host (up to 2 attempts). This tears down the TCP socket entirely and forces a fresh connection, fixing Connect/Active wedge that `clear bgp` alone cannot resolve.
+5. Switch to 30s poll interval during rekick phase.
+6. On timeout, fail with `pytest_assert` reporting which nexthops are still missing.
 
-**Design rationale**: After underlay recovery in eBGP-multihop VPN topologies, the remote PE's outgoing TCP socket can wedge in Connect/Active state. A local-side `clear bgp` alone only resets the local FSM; the remote peer may not attempt a new connection. The `remote_host` + `remote_clear_target` parameters allow the test to also reset the remote BGP session, ensuring both sides re-establish the VPN peering.
+**Escalation timeline** (with default parameters, `timeout=300`):
+
+| Time | Action |
+|------|--------|
+| 30s | First soft rekick: `clear bgp <nh>` + remote `clear bgp` |
+| 90s | Second soft rekick |
+| 150s | Third soft rekick (max_rekicks exhausted) |
+| 210s | First hard reset: remote `neighbor <target> shutdown` → 3s → `no neighbor <target> shutdown` |
+| 270s | Second hard reset |
+
+**Hard-reset implementation**:
+```python
+remote_host.command(
+    "vtysh -c 'configure terminal' "
+    "-c 'router bgp' "
+    "-c 'neighbor {} shutdown'".format(remote_clear_target),
+    module_ignore_errors=True)
+time.sleep(3)
+remote_host.command(
+    "vtysh -c 'configure terminal' "
+    "-c 'router bgp' "
+    "-c 'no neighbor {} shutdown'".format(remote_clear_target),
+    module_ignore_errors=True)
+```
+
+**Design rationale**: After underlay recovery in eBGP-multihop VPN topologies, the remote PE's outgoing TCP socket can wedge in Connect/Active state. A local-side `clear bgp` alone only resets the local FSM; the remote peer may not attempt a new connection. The soft rekick (`clear bgp` on both sides) resolves most cases. For persistent wedges where the TCP socket is stuck at the kernel level, the hard-reset escalation (`neighbor shutdown` / `no neighbor shutdown`) fully tears down and rebuilds the session, ensuring both sides re-establish the VPN peering.
 
 ### 8.4.3 Failure Triggers
 
