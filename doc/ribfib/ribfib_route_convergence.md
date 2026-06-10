@@ -1453,18 +1453,20 @@ void RIBNHGTable::removeNHGDependents(std::set<uint32_t> depends, uint32_t id) {
 
 ### Method Update: `RIBNHGEntry::checkNeedUpdate()`
 
-Add a check at the end of `checkNeedUpdate()` (after existing field comparisons): if any entry in `m_resolved_enable_group` is `false`, force `updated = true`. This ensures that when FRR re-sends a valid NHG (e.g., after reconvergence), the sticky disabled state is cleared and HW state is re-pushed even if no other fields changed.
+In rib_fib, `checkNeedUpdate()` returns `bool` (not void with an out-param). Add two checks at the end (after existing field comparisons): if any entry in `m_resolved_enable_group` is `false`, or if `m_updated_via_backwalk` is set, return `true`. This ensures that when FRR re-sends a valid NHG (e.g., after reconvergence), the sticky disabled state is cleared and HW state is re-pushed even if no other fields changed.
 
 ```cpp
-    /* If PIC previously marked any path as disabled in m_resolved_enable_group,
-     * an incoming NHG refresh from FRR should trigger a full setEntry to clear
-     * the sticky disabled state and re-push HW state. */
     for (const auto& kv : m_resolved_enable_group) {
         if (!kv.second) {
-            updated = true;
-            break;
+            return true;
         }
     }
+
+    if (m_updated_via_backwalk) {
+        return true;
+    }
+
+    return false;
 ```
 
 ### Method Update: `NHGMgr::updateExistingNHGFull()`
@@ -1490,15 +1492,87 @@ Two changes:
     // Ignore Gateway update
 ```
 
+**3. Dependent heal on valid NHGFULL**: After `setEntry()` succeeds in `RIBNHGTable::updateEntry()`, clear stale PIC disable flags in all dependents that track this NHG. When zebra re-sends a valid NHGFULL for an NHG, it means that NHG is live again. Any parent that had previously marked it disabled via PIC backwalk should be healed so future backwalks see correct state.
+
+```cpp
+        // A valid NHGFULL from zebra means this NHG is live again. Clear stale
+        // PIC disable flags in all dependents.
+        std::set<uint32_t> dependents = entry->getDependentsID();
+        for (uint32_t dep_id : dependents) {
+            RIBNHGEntry* dep_entry = getEntry(dep_id);
+            if (dep_entry) {
+                auto& dep_eg = dep_entry->getResolvedEnableGroup();
+                auto it2 = dep_eg.find(nhg.id);
+                if (it2 != dep_eg.end() && !it2->second) {
+                    it2->second = true;
+                }
+            }
+        }
+```
+
+This does NOT mark the dependent as backwalk-updated: re-enabling its flag does not by itself change its HW NHG. The backwalk flag is reserved for real backwalk-driven divergence.
+
+### `NEXTHOP_FLAG_ACTIVE` Filtering in `getNextHopGroupFields()`
+
+A new define is added at the top of `nhgmgr.cpp`:
+
+```cpp
+#ifndef NEXTHOP_FLAG_ACTIVE
+#define NEXTHOP_FLAG_ACTIVE (1 << 0)
+#endif
+```
+
+In `RIBNHGEntry::setEntry()`, the nexthop flags are stored: `m_flags = nhg.flags;`
+
+In `getNextHopGroupFields()`, after the backwalk leaf-disable filter, an additional check skips members whose `m_flags` does not have `NEXTHOP_FLAG_ACTIVE` set — unless the member's `nhg_flags` has `NEXTHOP_GROUP_RECEIVED_FLAG` (meaning zebra has confirmed the full group):
+
+```cpp
+        if (!(entry->m_flags & NEXTHOP_FLAG_ACTIVE) &&
+            !CHECK_FLAG(entry->m_nhg.nhg_flags, NEXTHOP_GROUP_RECEIVED_FLAG)) {
+            continue;
+        }
+```
+
+After the loop, if `nexthops` is empty (all paths filtered), return `-1` to signal no active nexthop in the group.
+
+### `fpmsync.rec` Recorder Infrastructure
+
+A new `FpmSyncRec` recorder class is added to `lib/recorder.h` and `lib/recorder.cpp` to record zebra NHG/NHT events from zebra to fpmsyncd, for debugging PIC/NHG convergence:
+
+* **Build**: `$(top_srcdir)/lib/recorder.cpp` added to `fpmsyncd_SOURCES` in `fpmsyncd/Makefile.am`, with `-I$(top_srcdir)/lib` added to `fpmsyncd_CFLAGS`/`fpmsyncd_CPPFLAGS`.
+* **Init**: In `fpmsyncd.cpp` `main()`, the recorder is configured on by default writing to `/var/log/swss/fpmsync.rec`.
+* **Recording points**:
+  - `onNextHopGroupFullMsg()`: records `NHGFULL|ADD|<id>|af=<af>|<json>` and `NHGFULL|DEL|<id>`
+  - `onNhtEventMsg()`: records `NHT|<json>`
+
+### `onSrv6VpnRouteMsg()` Simplification
+
+The singleton vs multi-nexthop branching (`isSingleNexthop()`) is removed. All VPN routes now use the unified path that writes `pic_context_id` and `nexthop_group` fields to the route table. This simplifies ~50 lines of duplicated route-table population logic into a single block.
+
+### `NHG_FULL_STATE_TABLE` Debug Writes in `onNextHopGroupFullMsg()`
+
+After `addNHGFull()`/`updateEntry()`, the NHG state is written to `APPL_STATE_DB` in the `NHG_FULL_STATE_TABLE:<id>` key for debugging. Fields include:
+- `json`: raw JSON string (pretty-printed)
+- `nh_grp_full`: format `[id:weight:num_direct,...]`
+- `depends`: format `[id1,id2,...]`
+- `dependents`: format `[id1,id2,...]`
+- `sonic_nhg_id`: the SONiC NHG ID (or `"N/A"`)
+- `create_time`: preserved on update, set on first add
+- `update_time`: refreshed on every update
+
+### `RIBNHGTable::delEntry()` Return Type
+
+In rib_fib, `delEntry()` returns `void` (not `int`). Callers should not check its return value.
+
 ### Method Update: `NHGMgr::addNewNHGFull()` — Index Map Population
 
-After `addEntry()` succeeds and before the "Process NHG offload" section, populate the nexthop-to-NHG index maps. The distinction between global and VRF maps uses `hasSonicGatewayObj()`:
+After `addEntry()` succeeds and before the "Process NHG offload" section, populate the nexthop-to-NHG index maps. The distinction between global and VRF maps uses `hasSonicPICObj()`:
 
 ```cpp
     /* Populate nexthop-to-NHG index maps for PIC backwalk */
     const string& gw = entry->getGatewayAddress();
     if (!gw.empty()) {
-        if (!entry->hasSonicGatewayObj()) {
+        if (!entry->hasSonicPICObj()) {
             /* Global table context (Part 1 fallback) */
             m_rib_nhg_table->addGlobalEntry(gw, entry);
         } else {
@@ -1516,7 +1590,7 @@ Before calling `m_rib_nhg_table->delEntry(id)`, remove the entry from index maps
     /* Remove from nexthop-to-NHG index maps before deletion */
     const string& gw = entry->getGatewayAddress();
     if (!gw.empty()) {
-        if (!entry->hasSonicGatewayObj()) {
+        if (!entry->hasSonicPICObj()) {
             m_rib_nhg_table->removeGlobalEntry(gw, entry);
         } else {
             m_rib_nhg_table->removeVrfEntry(gw, entry);
@@ -1850,7 +1924,7 @@ The existing VRF/VPN nexthop map is renamed for clarity. It maps a nexthop addre
   * **Global map population**: `addGlobalEntry()` is called in `NHGMgr::addNewNHGFull()` when the entry belongs to the global routing table (NOT VPN context) AND has a non-empty gateway address. This includes leaf NHGs (e.g., NHG 237 with gateway fc06::2) and intermediate NHGs (e.g., NHG 258 with gateway 2064:200::1e). ECMP NHGs without explicit gateway are excluded.
   * **Global map removal**: `removeGlobalEntry()` is called in `NHGMgr::delNHGFull()` for global-table entries with gateway.
   * **VRF map population**: `addVrfEntry()` is called in `NHGMgr::addNewNHGFull()` when `entry->needCreateSonicObject()` returns true (unchanged logic, just renamed).
-  * **VRF map removal**: `removeVrfEntry()` is called in `NHGMgr::delNHGFull()` when `entry->hasSonicGatewayObj()` returns true.
+  * **VRF map removal**: `removeVrfEntry()` is called in `NHGMgr::delNHGFull()` when `entry->hasSonicPICObj()` returns true.
 
 ### Backwalk for VPN-Scoped RIBNHGEntries
 For each `RIBNHGEntry*` returned by `getVrfEntries(nexthop)`, we explicitly trigger `fib_nhg_back_walk()` to propagate state changes.
@@ -2937,8 +3011,8 @@ These tests target individual functions for 80% code coverage of the PIC backwal
 
 | Test Name | Function Under Test | Setup | Key Assertions |
 |:----------|:-------------------|:------|:---------------|
-| `CheckNeedUpdate_DisabledEnableGroup` | `RIBNHGEntry::checkNeedUpdate()` | Load topology, trigger backwalk to disable path, then call `checkNeedUpdate()` with same NHG data | `updated` is `true` even though fields are identical (disabled m_resolved_enable_group forces update) |
-| `CheckNeedUpdate_AllEnabled` | `RIBNHGEntry::checkNeedUpdate()` | Load topology, no backwalk, call `checkNeedUpdate()` with same NHG data | `updated` is `false` (no disabled entries, no field changes) |
+| `CheckNeedUpdate_DisabledEnableGroup` | `RIBNHGEntry::checkNeedUpdate()` | Load topology, trigger backwalk to disable path, then call `checkNeedUpdate()` with same NHG data | Returns `true` even though fields are identical (disabled m_resolved_enable_group forces update) |
+| `CheckNeedUpdate_AllEnabled` | `RIBNHGEntry::checkNeedUpdate()` | Load topology, no backwalk, call `checkNeedUpdate()` with same NHG data | Returns `false` (no disabled entries, no field changes) |
 | `GlobalMapAddRemove` | `addGlobalEntry()` / `removeGlobalEntry()` / `getGlobalEntries()` | Load topology, verify entries indexed by gateway | `getGlobalEntries("fc06::2")` returns leaf entries; after `removeGlobalEntry()`, set is empty |
 | `VrfMapAddRemove` | `addVrfEntry()` / `removeVrfEntry()` / `getVrfEntries()` | Load topology 3 (has VPN entries), verify VRF-context entries | `getVrfEntries("2064:100::1d")` returns VPN entries; after remove, returns empty |
 | `AddNHGDependents` | `RIBNHGTable::addNHGDependents()` | Load topology, check dependents lists | ECMP 238's depends={234,237} → 234.dependents contains 238, 237.dependents contains 238 |
@@ -2965,6 +3039,10 @@ Three topology JSON files define the test NHG graphs (located in `tests/mock_tes
 - `test_topology_3.json` — 6 entries (NHGs 234, 237, 238, 239, 240, 241) — includes VRF/VPN entries
 
 Each file is a JSON object keyed by entry name, with values being full `NextHopGroupFull` JSON matching the sonic-fib schema.
+
+### Existing Test Helper Modification
+
+In `tests/mock_tests/fpmsyncd/ut_helpers_fpmsyncd.cpp`, the IPv4 and IPv6 single-nexthop helper functions (`createSingleIPv4NextHopNHGFull`, `createSingleIPv6NextHopNHGFull`) are updated to set `flags_in = 1` (was `0`). This sets `NEXTHOP_FLAG_ACTIVE` on test nexthops so they pass the new active-path filter in `getNextHopGroupFields()`.
 
 ### Main Test Flow
 Three test patterns are used:
