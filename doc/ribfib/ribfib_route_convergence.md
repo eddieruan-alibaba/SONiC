@@ -135,6 +135,8 @@
   - [8.4 sonic-mgmt system level tests](#84-sonic-mgmt-system-level-tests)
     - [8.4.1 7-Node Topology Key Connections](#841-7-node-topology-key-connections)
     - [8.4.2 Helper Functions](#842-helper-functions)
+      - [Refactored: `turn_on_off_frr_debug(duthosts, rand_one_dut_hostname, nbrhosts, filename, vm, is_on=True, debug_cmds_list=None)`](#refactored-turn_on_off_frr_debugduthosts-rand_one_dut_hostname-nbrhosts-filename-vm-is_ontrue-debug_cmds_listnone)
+      - [Refactored: `collect_frr_debugfile(duthosts, rand_one_dut_hostname, nbrhosts, filename, vm)`](#refactored-collect_frr_debugfileduthosts-rand_one_dut_hostname-nbrhosts-filename-vm)
       - [1. apply\_config\_cmmds\_to\_vtysh(nbrhost, cmd\_list)](#1-apply_config_cmmds_to_vtyshnbrhost-cmd_list)
       - [2. collect\_db\_entries(duthost, testcase\_name, db\_name, collecting\_prefix)](#2-collect_db_entriesduthost-testcase_name-db_name-collecting_prefix)
       - [3. collect\_vtysh\_route\_snapshot(duthost, snapshot\_name)](#3-collect_vtysh_route_snapshotduthost-snapshot_name)
@@ -150,6 +152,8 @@
       - [9. `verify_no_nhg_update(duthost, testcase_name, trigger_ts=None)`](#9-verify_no_nhg_updateduthost-testcase_name-trigger_tsnone)
       - [10. `get_dut_timestamp(duthost)`](#10-get_dut_timestampduthost)
       - [11. `_parse_rec_timestamp(line)`](#11-_parse_rec_timestampline)
+      - [12. `verify_pic_nhg_switch(duthost, testcase_name, backup_nexthop, trigger_ts=None)`](#12-verify_pic_nhg_switchduthost-testcase_name-backup_nexthop-trigger_tsnone)
+      - [13. `wait_for_vrf_route_recursive_paths(duthost, vrf, prefix, expected_nexthops, ...)`](#13-wait_for_vrf_route_recursive_pathsduthost-vrf-prefix-expected_nexthops-)
     - [8.4.3 Failure Triggers](#843-failure-triggers)
     - [8.4.4 Test Cases](#844-test-cases)
       - [Module-Level Constants](#module-level-constants)
@@ -157,10 +161,14 @@
       - [Function Signatures](#function-signatures)
       - [`test_topology1_local_failure`](#test_topology1_local_failure)
       - [`test_topology1_remote_bgp_failure`](#test_topology1_remote_bgp_failure)
-      - [`test_topology1_remote_igp_failure`](#test_topology1_remote_igp_failure)
+      - [`test_remote_igp_failure`](#test_remote_igp_failure)
+      - [`test_remote_igp_failure_filtered`](#test_remote_igp_failure_filtered)
       - [`test_topology2_local_failure`](#test_topology2_local_failure)
       - [`test_topology2_remote_bgp_failure`](#test_topology2_remote_bgp_failure)
-      - [`test_topology2_remote_igp_failure`](#test_topology2_remote_igp_failure)
+      - [Existing Test Modifications](#existing-test-modifications)
+        - [`test_traffic_check_via_trex`](#test_traffic_check_via_trex)
+        - [`test_traffic_check_remote_igp_fail_case`](#test_traffic_check_remote_igp_fail_case)
+        - [`test_traffic_check_remote_bgp_fail_case`](#test_traffic_check_remote_bgp_fail_case)
 - [9. Appendix](#9-appendix)
   - [Key refinements identified during LLM-assisted brainstorming:](#key-refinements-identified-during-llm-assisted-brainstorming)
   - [First Round Code Generated](#first-round-code-generated)
@@ -2992,7 +3000,6 @@ Within the current sonic-mgmt framework, system-level SRv6 validation is anchore
 | PE2 | Ethernet8 | fc03::1 | P3 | Ethernet8 | fc03::2 | PE2 uplink |
 
 **Route Origins**
-
 | Prefix | Origin Node | Reaches PE3 via |
 |--------|-------------|-----------------|
 | 2064:100::1d/128 | PE1 | P1/P3 → P2(fc08::2) + P4(fc06::2) |
@@ -3004,6 +3011,45 @@ Both prefixes have 2-path ECMP at PE3: via fc06::2 (Ethernet12→P4) and fc08::2
 All helper functions are centralized in `tests/srv6/srv6_utils.py` and adhere to the following design guidelines:
 * Minimize RPC overhead: Prefer executing multiple device commands through a single local Python script rather than issuing individual RPC calls for each command.
 * Batch vtysh configurations: Use the -c flag to pass multiple configuration commands to vtysh in a single invocation.
+
+#### Refactored: `turn_on_off_frr_debug(duthosts, rand_one_dut_hostname, nbrhosts, filename, vm, is_on=True, debug_cmds_list=None)`
+
+Enable or disable FRR debug logging on a neighbor VM in a single vtysh invocation.
+
+The refactored version:
+* Accepts an optional `debug_cmds_list` parameter to override the default `debug_cmds` list (used by IGP tests that need additional zebra/bgp debug commands).
+* Combines `log file` (config-mode) and all debug commands (enable-mode) into a single `vtysh` call using `-c 'configure terminal' -c 'log file ...' -c 'end' -c '<debug cmd>' ...` followed by `-c 'show debug'` to verify.
+* Uses `pfxstr = "" if is_on else "no "` (no extra whitespace).
+
+```python
+def turn_on_off_frr_debug(duthosts, rand_one_dut_hostname, nbrhosts, filename, vm, is_on=True,
+                          debug_cmds_list=None):
+    nbrhost = nbrhosts[vm]['host']
+    pfxstr = "" if is_on else "no "
+    cmds = debug_cmds_list if debug_cmds_list is not None else debug_cmds
+
+    vtysh_args = ["-c 'configure terminal'",
+                  "-c '{}log file {}'".format(pfxstr, filename),
+                  "-c 'end'"]
+    for dcmd in cmds:
+        vtysh_args.append("-c '{}{}'".format(pfxstr, dcmd))
+    vtysh_args.append("-c 'show debug'")
+
+    cmd = "vtysh " + " ".join(vtysh_args)
+    nbrhost.shell(cmd, module_ignore_errors=True)
+```
+
+#### Refactored: `collect_frr_debugfile(duthosts, rand_one_dut_hostname, nbrhosts, filename, vm)`
+
+Copy the FRR debug log file from the `bgp` Docker container to `test_log_dir`.
+
+The refactored version uses `docker exec bgp cat <file>` with shell redirection instead of `docker cp`, which avoids issues with some container runtime configurations:
+
+```python
+    basename = filename.split("/")[-1]
+    cmd = "docker exec bgp cat {} > {}/{}".format(filename, test_log_dir, basename)
+    nbrhost.shell(cmd, module_ignore_errors=True)
+```
 
 #### 1. apply_config_cmmds_to_vtysh(nbrhost, cmd_list)
 Apply a list of vtysh configuration commands to the given device in a single SSH round-trip.
@@ -3095,7 +3141,7 @@ Implementation: Build a shell command string where the first command uses `>` (o
 There are two collection functions that work as a pair:
 
 ##### `start_record_collection(duthost, testcase_name)`
-Capture a "before" snapshot, then start tailing swss.rec/sairedis.rec/syslog on DUT.
+Capture a "before" snapshot, then start tailing swss.rec/fpmsync.rec/syslog on DUT.
 
 **Execution order is critical**: Snapshot collection MUST complete before starting tail processes, so tails only capture events triggered by the subsequent test action (not by the snapshot commands themselves).
 
@@ -3106,12 +3152,12 @@ Steps:
    * `collect_db_entries(duthost, "{testcase_name}_before", "appstatedb", "NHG_FULL_STATE_TABLE")`
    * `collect_vtysh_route_snapshot(duthost, "{testcase_name}_before")`
 3. Start background tails using `setsid` (properly daemonizes the process, unlike `nohup` which may not survive SSH session drops):
-   * For swss.rec and sairedis.rec (source: `/var/log/swss/`):
+   * For swss.rec and fpmsync.rec (source: `/var/log/swss/`):
      ```
      duthost.command(
          "setsid sh -c 'tail -f /var/log/swss/{rec} > {outfile} 2>&1 &' </dev/null >/dev/null 2>&1")
      ```
-     Output file: `{test_log_dir}/{prefix}_{testcase_name}.rec` where `prefix` = filename without `.rec` (e.g., `swss`, `sairedis`)
+     Output file: `{test_log_dir}/{prefix}_{testcase_name}.rec` where `prefix` = filename without `.rec` (e.g., `swss`, `fpmsync`)
    * For syslog (source: `/var/log/syslog`):
      ```
      duthost.command(
@@ -3216,13 +3262,15 @@ Assert all NEXTHOP_GROUP_TABLE updates happen before ROUTE_TABLE updates after t
 
 **Algorithm**:
 1. Read the rec file from DUT via `duthost.command("cat {rec_file}")`
-2. **Timestamp filtering**: If `trigger_ts` is provided, filter lines to only those within a 3-second window `[trigger_ts, trigger_ts + 3s]` using `_parse_rec_timestamp()`. Lines outside this window are not part of the PIC convergence event.
+2. **Timestamp filtering**: If `trigger_ts` is provided, filter lines to only those within a 5-second window `[trigger_ts, trigger_ts + 5s]` using `_parse_rec_timestamp()`. Lines outside this window are not part of the PIC convergence event.
 3. **Find trigger line**: Scan for a line containing both `"NEIGH_TABLE:"` and `":{trigger_nexthop}|DEL"`. Fail with `pytest_assert` if not found.
 4. **Check ordering** after the trigger line:
    * Track `saw_route` flag (set to True on first `ROUTE_TABLE:` line)
+   * Track `nhg_ids_seen_before_route` set — any NHG ID that appears before the first ROUTE_TABLE line is recorded here
    * Skip `ROUTE_TABLE` lines containing `"protocol:kernel"` (loopback routes, not part of reconvergence)
-   * After `saw_route` is True, if a `NEXTHOP_GROUP_TABLE:` line appears:
+   * After `saw_route` is True, if a `NEXTHOP_GROUP_TABLE:` line appears with `"|SET|"`:
      * **Skip** if the line does NOT contain `trigger_nexthop` (these are unrelated NHG updates from zebra recursive resolution)
+     * **Skip** if the NHG's sonic ID was already seen before the first ROUTE_TABLE line (the NHG was already correctly updated in the PIC fast-path; this later update is zebra convergence catching up)
      * **Skip** if `_is_skipable_nhg(duthost, sonic_nhg_id)` returns True (SRv6 depends or pending deletion)
      * Otherwise → **ordering violation**: fail with `pytest_assert`
 
@@ -3247,13 +3295,13 @@ Used in BGP remote failure tests where route withdrawal should result in only RO
 **Algorithm**:
 1. Read the rec file from DUT
 2. For each line containing `"NEXTHOP_GROUP_TABLE:"`:
-   * **Skip** if timestamp is outside the 3-second window `[trigger_ts, trigger_ts + 3s]` (not caused by the test action)
+   * **Skip** if timestamp is outside the 5-second window `[trigger_ts, trigger_ts + 5s]` (not caused by the test action)
    * **Skip** if line does NOT contain `"|SET|"` (DEL operations don't push NHG changes to hardware)
    * **Skip** if `_is_skipable_nhg(duthost, sonic_nhg_id)` returns True (SRv6 depends or pending deletion)
    * Otherwise → **violation**: fail with `pytest_assert`
 
 A NEXTHOP_GROUP_TABLE entry is NOT flagged as a violation when:
-  - its timestamp is outside the `[trigger_ts, trigger_ts + 3s]` window (not caused by the test action)
+  - its timestamp is outside the `[trigger_ts, trigger_ts + 5s]` window (not caused by the test action)
   - it is a DEL (deletion) rather than a SET
   - the NHG's RIB entry has SRv6 info in its depends (legitimate zebra convergence update), or its RIB ID is pending deletion. This is the same skip logic used by `_is_skipable_nhg()`.
 
@@ -3271,6 +3319,68 @@ Rec line format: `YYYY-MM-DD.HH:MM:SS.ffffff|<rest>`
 
 **Implementation**: Use regex `r'^(\d{4}-\d{2}-\d{2}\.\d{2}:\d{2}:\d{2}\.\d+)'` to extract the timestamp prefix, then parse with `datetime.datetime.strptime(match.group(1), "%Y-%m-%d.%H:%M:%S.%f")`. Returns `None` if the line doesn't start with a recognizable timestamp.
 
+#### 12. `verify_pic_nhg_switch(duthost, testcase_name, backup_nexthop, trigger_ts=None)`
+
+Verify PIC NHG switch: confirms that the backup nexthop is now the sole entry in a NEXTHOP_GROUP_TABLE SET and that VRF route updates exist in the record.
+
+Used in the filtered IGP failure test where PIC edge handling should produce a clean switch to the backup nexthop without transient churn.
+
+**Args**:
+* duthost: DUT host object
+* testcase_name: test case name
+* backup_nexthop: the remaining nexthop IP (e.g. `"2064:200::1e"`)
+* trigger_ts: optional datetime; only lines within `[trigger_ts, trigger_ts + 5s]` are checked.
+
+**Algorithm**:
+1. Read the rec file from DUT, apply timestamp filtering if `trigger_ts` provided (same 5-second window as other helpers).
+2. **Step 1**: Find a `NEXTHOP_GROUP_TABLE:*|SET|` line whose `nexthop:` field contains exactly one entry matching `backup_nexthop`. Fail if not found.
+3. **Step 2**: Verify at least one `ROUTE_TABLE:Vrf*|SET|` line exists in the record (VRF routes were updated). Fail if no VRF route updates found.
+
+```python
+def verify_pic_nhg_switch(duthost, testcase_name, backup_nexthop, trigger_ts=None):
+    """Verify PIC NHG switch: backup NHG has single nexthop and VRF routes are updated."""
+```
+
+#### 13. `wait_for_vrf_route_recursive_paths(duthost, vrf, prefix, expected_nexthops, ...)`
+
+Poll `show ip route vrf <vrf> <prefix>` until all expected recursive nexthops appear, with automatic rekick logic to recover from wedged BGP sessions.
+
+**Signature**:
+```python
+def wait_for_vrf_route_recursive_paths(duthost, vrf, prefix, expected_nexthops,
+                                       poll_interval=10, timeout=100,
+                                       rekick_after=30, rekick_interval=120,
+                                       max_rekicks=3,
+                                       remote_host=None,
+                                       remote_clear_target=None):
+```
+
+**Args**:
+* duthost: host running vtysh
+* vrf: VRF name (e.g. `"Vrf1"`)
+* prefix: route prefix (e.g. `"192.100.0.1"`)
+* expected_nexthops: list of recursive nexthop IPs that must all be present
+* poll_interval: seconds between retries (switches to 30s after rekick phase starts)
+* timeout: total seconds to wait before failing
+* rekick_after: if a nexthop is still missing after this many seconds, issue `clear bgp <nh>` for that neighbor
+* rekick_interval: seconds between successive rekick attempts for the same neighbor
+* max_rekicks: maximum number of clear bgp attempts per nexthop
+* remote_host: optional remote peer host. When set, each rekick also issues `clear bgp <remote_clear_target>` on this host. Required for eBGP-multihop VPN sessions where the remote outgoing TCP socket can wedge in Connect/Active and a local-side clear alone cannot unstick it.
+* remote_clear_target: BGP neighbor IP to clear on `remote_host` (e.g. the local DUT's loopback as seen by the remote peer)
+
+**Algorithm**:
+1. Poll `vtysh -c 'show ip route vrf {vrf} {prefix}'` on the DUT.
+2. Check if all `expected_nexthops` appear in the output. If so, return success.
+3. After `rekick_after` seconds, enter the rekick phase:
+   * For each missing nexthop, check if the underlay route exists (`show ipv6 route {nh}` contains `"Known via"`). Skip rekick if underlay is not yet reachable.
+   * If reachable, issue `vtysh -c 'clear bgp {nh}'` on DUT.
+   * If `remote_host` is provided, also issue `vtysh -c 'clear bgp {remote_clear_target}'` on the remote host.
+   * Respect `rekick_interval` between successive attempts and `max_rekicks` cap per nexthop.
+4. Switch to 30s poll interval during rekick phase.
+5. On timeout, fail with `pytest_assert` reporting which nexthops are still missing.
+
+**Design rationale**: After underlay recovery in eBGP-multihop VPN topologies, the remote PE's outgoing TCP socket can wedge in Connect/Active state. A local-side `clear bgp` alone only resets the local FSM; the remote peer may not attempt a new connection. The `remote_host` + `remote_clear_target` parameters allow the test to also reset the remote BGP session, ensuring both sides re-establish the VPN peering.
+
 ### 8.4.3 Failure Triggers
 
 All tests begin by applying static routes via `apply_config_cmmds_to_vtysh` then waiting 30s for FRR convergence and ASIC offload to complete before triggering any failure.
@@ -3285,11 +3395,11 @@ Three failure mechanisms are used across the six test cases:
 
 **Recovery**
 
-| Failure | Recovery | Wait Time |
-|---------|----------|-----------|
-| Local | PE3: `sudo ifconfig Ethernet12 up` | 20s |
-| Remote BGP | PE1: `vtysh -c 'configure terminal' -c 'router bgp 64600' -c 'no neighbor 2064:300::1f shutdown'` | 20s |
-| Remote IGP | P1: `sudo ifconfig Ethernet112 up` + P3: `sudo ifconfig Ethernet4 up` | 15s |
+| Failure | Recovery | Wait/Verification |
+|---------|----------|-------------------|
+| Local | PE3: `sudo ifconfig Ethernet12 up` | 20s, then assert nexthops restored |
+| Remote BGP | PE1: `no neighbor 2064:300::1f shutdown` + `clear bgp 2064:300::1f` + DUT `clear bgp 2064:100::1d` | `wait_for_vrf_route_recursive_paths` with `remote_host=pe1, remote_clear_target="2064:300::1f"` |
+| Remote IGP | P1: `sudo ifconfig Ethernet112 up` + P3: `sudo ifconfig Ethernet4 up` + PE1 `clear bgp 2064:300::1f` + DUT `clear bgp 2064:100::1d` | `wait_for_vrf_route_recursive_paths` with `remote_host=pe1, remote_clear_target="2064:300::1f"` |
 
 **Assertions**
 
@@ -3297,15 +3407,18 @@ Three failure mechanisms are used across the six test cases:
 |-----------|---------------|----------------|---------|--------------|
 | T1/T2 Local (fc06::2 down) | `fc06::2` | `fc08::2` | 10s | `verify_nhg_before_routes` Check if NHG updates would be triggered by NHT before routes updates|
 | T1/T2 Remote BGP (PE1 BGP shutdown) | `2064:100::1d` | `2064:200::1e` | 10s | `verify_no_nhg_update`, check if there is no NHG update since it is BGP routes switch from 2->1 one by one case |
-| T1/T2 Remote IGP (sequential link failure) | `2064:100::1d` | `2064:200::1e` | 30s | None — BGP does not give priority to infra route updates over VRF route updates, so PIC NHG ordering cannot be reliably verified from the swss record file. |
+| Remote IGP unfiltered | `2064:100::1d` | `2064:200::1e` | 30s | None — BGP path hunting causes transient route-replace churn, making strict PIC ordering unreliable from swss record |
+| Remote IGP filtered | `2064:100::1d` | `2064:200::1e` | 30s | `verify_pic_nhg_switch` — with AS-path filters preventing path hunting, verifies clean PIC NHG switch to backup nexthop `2064:200::1e` |
 
 ### 8.4.4 Test Cases
 
-We create 6 independent test cases (3 per topology). Each test:
+We create 6 independent PIC test cases. Each test:
 - Sets up its own topology (static routes via vtysh)
 - Verifies initial state before triggering failure
 - Asserts after APPDB or swss rec file verification
 - Cleans up (recover + remove routes)
+
+Additionally, 3 existing traffic tests are modified to add pre-condition route verification and robust recovery using `wait_for_vrf_route_recursive_paths`.
 
 Tests are added to the existing `test_srv6_basic_sanity.py` file, importing helpers from `srv6_utils.py`:
 ```python
@@ -3317,6 +3430,8 @@ from srv6_utils import (
     assert_appdb_nexthop_present,
     verify_no_nhg_update,
     verify_nhg_before_routes,
+    verify_pic_nhg_switch,
+    wait_for_vrf_route_recursive_paths,
     get_dut_timestamp,
     turn_on_off_frr_debug,
     collect_frr_debugfile,
@@ -3367,10 +3482,80 @@ TOPO2_STATIC_ROUTES_REMOVE = [
 ]
 ```
 
+**AS-path Filter Constants** (used by `test_remote_igp_failure_filtered`):
+
+These filters prevent BGP path hunting during remote IGP failure. Without them, P2/P4 briefly advertise transient longer AS-path routes for `2064:100::1d` before the final withdrawal arrives, causing PE3 to process unwanted route-replace events.
+
+```python
+# P2/P4 outbound: only advertise PE loopbacks with short AS-path (2 hops) to PE3.
+P2_OUTBOUND_FILTER = [
+    "ipv6 prefix-list PE_LOOPBACKS seq 5 permit 2064:100::1d/128",
+    "ipv6 prefix-list PE_LOOPBACKS seq 10 permit 2064:200::1e/128",
+    "ipv6 prefix-list PE_LOOPBACKS seq 15 permit 2064:300::1f/128",
+    "bgp as-path access-list SHORT_PATH_OUT permit ^[0-9]+_[0-9]+$",
+    "route-map TO_PE3 permit 10",
+    " match ipv6 address prefix-list PE_LOOPBACKS",
+    " match as-path SHORT_PATH_OUT",
+    "route-map TO_PE3 deny 20",
+    " match ipv6 address prefix-list PE_LOOPBACKS",
+    "route-map TO_PE3 permit 30",
+    "router bgp 65102",
+    " address-family ipv6 unicast",
+    "  neighbor fc08::1 route-map TO_PE3 out",
+]
+
+P2_OUTBOUND_FILTER_REMOVE = [
+    "router bgp 65102",
+    " address-family ipv6 unicast",
+    "  neighbor fc08::1 route-map pass_all out",
+    "exit-address-family",
+    "exit",
+    "no route-map TO_PE3",
+    "no ipv6 prefix-list PE_LOOPBACKS",
+    "no bgp as-path access-list SHORT_PATH_OUT",
+]
+
+# P4 uses the same filter structure with its own BGP ASN and neighbor
+P4_OUTBOUND_FILTER = [
+    # ... same structure as P2 but with "router bgp 65103" and "neighbor fc06::1 route-map TO_PE3 out"
+]
+
+# PE3 inbound: only accept PE loopbacks with short AS-path (3 hops including peer AS).
+PE3_INBOUND_FILTER = [
+    "ipv6 prefix-list PE_LOOPBACKS seq 5 permit 2064:100::1d/128",
+    "ipv6 prefix-list PE_LOOPBACKS seq 10 permit 2064:200::1e/128",
+    "bgp as-path access-list SHORT_PATH permit ^[0-9]+_[0-9]+_[0-9]+$",
+    "route-map FILTER_IN permit 10",
+    " match ipv6 address prefix-list PE_LOOPBACKS",
+    " match as-path SHORT_PATH",
+    " set ipv6 next-hop prefer-global",
+    "route-map FILTER_IN deny 20",
+    " match ipv6 address prefix-list PE_LOOPBACKS",
+    "route-map FILTER_IN permit 30",
+    " set ipv6 next-hop prefer-global",
+    "router bgp 64602",
+    " address-family ipv6 unicast",
+    "  neighbor fc08::2 route-map FILTER_IN in",
+    "  neighbor fc06::2 route-map FILTER_IN in",
+]
+
+PE3_INBOUND_FILTER_REMOVE = [
+    "router bgp 64602",
+    " address-family ipv6 unicast",
+    "  neighbor fc08::2 route-map pass_all_in in",
+    "  neighbor fc06::2 route-map pass_all_in in",
+    "exit-address-family",
+    "exit",
+    "no route-map FILTER_IN",
+    "no ipv6 prefix-list PE_LOOPBACKS",
+    "no bgp as-path access-list SHORT_PATH",
+]
+```
+
 #### Common Test Pattern
 
-All 6 test cases follow a shared structure.
-Note: for IGP fail case, due to current BGP implementation, we can't achieve all PIC NHG handled before service routes a.k.a vrf routes in this case.
+All test cases follow a shared structure.
+Note: for the unfiltered IGP fail case, due to current BGP implementation, we can't achieve all PIC NHG handled before service routes. The filtered IGP variant adds AS-path route-maps and `bgp suppress-fib-pending` to prevent path hunting and achieve clean PIC ordering.
 
 **Local, IGP and BGP failure tests** (`test_failed` flag pattern):
 
@@ -3432,24 +3617,27 @@ def test_topologyN_xxx_failure(duthosts, nbrhosts):  # or (duthosts, rand_one_du
 - `time.sleep(20)` after recovery: allows enough time for NHG re-notification and APPDB restoration.
 - `test_failed` flag: prevents recovery path assertions from running when the primary test already failed (avoids cascading failures masking the root cause).
 - Nested try/finally: ensures cleanup always runs regardless of assertion failures.
-- `trigger_ts`: captured immediately before the trigger action via `get_dut_timestamp()`, passed to verification functions for 3-second window filtering.
+- `trigger_ts`: captured immediately before the trigger action via `get_dut_timestamp()`, passed to verification functions for 5-second window filtering.
+- Recovery uses `wait_for_vrf_route_recursive_paths` with `remote_host`/`remote_clear_target` to handle eBGP-multihop VPN session wedging during route re-establishment.
 
 #### Function Signatures
 
-| Test | Parameters | Needs P1/P3? |
-|:-----|:-----------|:-------------|
+| Test | Parameters | Needs P1/P3/PE1? |
+|:-----|:-----------|:-----------------|
 | `test_topology1_local_failure` | `(duthosts, nbrhosts)` | No |
 | `test_topology1_remote_bgp_failure` | `(duthosts, rand_one_dut_hostname, nbrhosts)` | PE1 only |
-| `test_topology1_remote_igp_failure` | `(duthosts, rand_one_dut_hostname, nbrhosts)` | P1 + P3 |
+| `test_remote_igp_failure` | `(duthosts, rand_one_dut_hostname, nbrhosts)` | P1 + P3 + PE1 |
+| `test_remote_igp_failure_filtered` | `(duthosts, rand_one_dut_hostname, nbrhosts)` | P1 + P2 + P3 + P4 + PE1 |
 | `test_topology2_local_failure` | `(duthosts, nbrhosts)` | No |
 | `test_topology2_remote_bgp_failure` | `(duthosts, rand_one_dut_hostname, nbrhosts)` | PE1 only |
-| `test_topology2_remote_igp_failure` | `(duthosts, rand_one_dut_hostname, nbrhosts)` | P1 + P3 |
 
 Node access patterns:
 - `duthost = nbrhosts["PE3"]['host']` — DUT (where static routes are applied)
-- `pe1_host = nbrhosts["PE1"]['host']` — for BGP shutdown
+- `pe1_host = nbrhosts["PE1"]['host']` — for BGP shutdown and remote rekick
 - `p1 = duthosts[rand_one_dut_hostname]` — P1 node (is the actual DUT host in the testbed)
+- `p2 = nbrhosts["P2"]['host']` — P2 node (AS-path filters)
 - `p3 = nbrhosts["P3"]['host']` — P3 node
+- `p4 = nbrhosts["P4"]['host']` — P4 node (AS-path filters)
 
 #### `test_topology1_local_failure`
 
@@ -3470,11 +3658,52 @@ duthost.command("sudo ifconfig Ethernet12 down")
 **Recovery:** `duthost.command("sudo ifconfig Ethernet12 up")`, wait 20s
 
 **Recovery path check:** verify both `fc06::2` and `fc08::2` are present again.
+Here is an example swss record file which shows after port is down, NHG update would happen first before routes, a.k.a backwalk would make a quick fixup on NHGs to minimize traffic loss window before zebra reconverge routes and trigger routes updates.
 
+```
+2026-06-10.03:03:00.899108|NEIGH_TABLE:Ethernet12:fc06::2|DEL
+2026-06-10.03:03:00.904206|NEIGH_TABLE:Ethernet12:fe80::fc54:ff:fe30:ea06|DEL
+2026-06-10.03:03:00.908203|NEXTHOP_GROUP_TABLE:1|SET|nexthop:fc08::2|ifname:Ethernet4|weight:1
+2026-06-10.03:03:00.908321|NEXTHOP_GROUP_TABLE:2|SET|nexthop:fc08::2|ifname:Ethernet4|weight:1
+2026-06-10.03:03:00.908463|NEXTHOP_GROUP_TABLE:3|SET|nexthop:fc08::2|ifname:Ethernet4|weight:1
+2026-06-10.03:03:00.908561|NEXTHOP_GROUP_TABLE:5|SET|nexthop:fc08::2|ifname:Ethernet4|weight:1
+2026-06-10.03:03:00.908610|NEXTHOP_GROUP_TABLE:6|SET|nexthop:fc08::2|ifname:Ethernet4|weight:1
+2026-06-10.03:03:00.908651|NEXTHOP_GROUP_TABLE:7|SET|nexthop:fc08::2,fc08::2|ifname:Ethernet4,Ethernet4|weight:1,1
+2026-06-10.03:03:00.908693|NEXTHOP_GROUP_TABLE:11|SET|nexthop:fc08::2,fc08::2|ifname:Ethernet4,Ethernet4|weight:1,1
+2026-06-10.03:03:00.908735|NEXTHOP_GROUP_TABLE:12|SET|nexthop:fc08::2|ifname:Ethernet4|weight:1
+2026-06-10.03:03:00.908774|NEXTHOP_GROUP_TABLE:13|SET|nexthop:fc08::2|ifname:Ethernet4|weight:1
+2026-06-10.03:03:00.908810|NEXTHOP_GROUP_TABLE:14|SET|nexthop:fc08::2|ifname:Ethernet4|weight:1
+2026-06-10.03:03:00.908842|NEXTHOP_GROUP_TABLE:15|SET|nexthop:fc08::2|ifname:Ethernet4|weight:1
+2026-06-10.03:03:00.908883|NEXTHOP_GROUP_TABLE:16|SET|nexthop:fc08::2|ifname:Ethernet4|weight:1
+2026-06-10.03:03:00.908922|NEXTHOP_GROUP_TABLE:17|SET|nexthop:fc08::2|ifname:Ethernet4|weight:1
+2026-06-10.03:03:00.908963|NEXTHOP_GROUP_TABLE:18|SET|nexthop:fc08::2|ifname:Ethernet4|weight:1
+2026-06-10.03:03:01.688461|ROUTE_TABLE:Vrf1:192.100.0.8|SET|pic_context_id:3|nexthop_group:9|nexthop:|vpn_sid:|seg_src:|ifname:
+2026-06-10.03:03:01.688548|ROUTE_TABLE:2064:100::1d|SET|nexthop_group:1|protocol:bgp
+2026-06-10.03:03:01.688626|ROUTE_TABLE:fc06::/120|SET|nexthop:fc08::2|ifname:Ethernet4|protocol:bgp
+2026-06-10.03:03:01.688673|ROUTE_TABLE:fc00::74/126|SET|nexthop_group:1|protocol:bgp
+2026-06-10.03:03:01.688714|ROUTE_TABLE:fd00:201:201:1::/64|SET|nexthop_group:1|protocol:bgp
+2026-06-10.03:03:01.688745|ROUTE_TABLE:Vrf1:192.100.0.9|SET|pic_context_id:3|nexthop_group:9|nexthop:|vpn_sid:|seg_src:|ifname:
+2026-06-10.03:03:01.688789|ROUTE_TABLE:Vrf1:192.100.0.1|SET|pic_context_id:3|nexthop_group:9|nexthop:|vpn_sid:|seg_src:|ifname:
+2026-06-10.03:03:01.688875|ROUTE_TABLE:2::2|SET|nexthop:fc08::2|ifname:Ethernet4|protocol:0xc4
+2026-06-10.03:03:01.688925|ROUTE_TABLE:Vrf1:192.100.0.5|SET|pic_context_id:3|nexthop_group:9|nexthop:|vpn_sid:|seg_src:|ifname:
+2026-06-10.03:03:01.688965|ROUTE_TABLE:fc01::84/126|SET|nexthop:fc08::2|ifname:Ethernet4|protocol:bgp
+2026-06-10.03:03:01.688998|ROUTE_TABLE:1::1|SET|nexthop:fc08::2|ifname:Ethernet4|protocol:0xc4
+2026-06-10.03:03:01.689031|ROUTE_TABLE:fc04::/120|SET|nexthop:fc08::2|ifname:Ethernet4|protocol:bgp
+2026-06-10.03:03:01.689075|ROUTE_TABLE:fc0a::/120|SET|nexthop_group:1|protocol:bgp
+```
 
 #### `test_topology1_remote_bgp_failure`
 
 **testcase_name:** `"t1_remote_bgp"`
+
+**Setup** (before trigger):
+```python
+wait_for_vrf_route_recursive_paths(
+    duthost, "Vrf1", "192.100.0.1",
+    ["2064:100::1d", "2064:200::1e"],
+    poll_interval=10, timeout=300,
+    remote_host=pe1_host, remote_clear_target="2064:300::1f")
+```
 
 **Trigger:**
 ```python
@@ -3494,8 +3723,15 @@ BGP NOTIFICATION sent immediately → clean single ROUTE_DELETE, no intermediate
 ```python
 pe1_host.command("vtysh -c 'configure terminal' -c 'router bgp 64600' "
                  "-c 'no neighbor 2064:300::1f shutdown'")
+time.sleep(10)
+pe1_host.command("vtysh -c 'clear bgp 2064:300::1f'", module_ignore_errors=True)
+duthost.command("vtysh -c 'clear bgp 2064:100::1d'", module_ignore_errors=True)
+wait_for_vrf_route_recursive_paths(
+    duthost, "Vrf1", "192.100.0.1",
+    ["2064:100::1d", "2064:200::1e"],
+    poll_interval=10, timeout=300,
+    remote_host=pe1_host, remote_clear_target="2064:300::1f")
 ```
-Wait 20s.
 
 **Recovery path check:** verify both `2064:100::1d` and `2064:200::1e` are present again.
 
@@ -3523,15 +3759,27 @@ Here is an example swss record file showing only ROUTE_TABLE updates (no NEXTHOP
 2026-05-20.02:44:20.681146|ROUTE_TABLE:Vrf1:192.100.0.5|SET|pic_context_id:2|nexthop_group:8|nexthop:|vpn_sid:|seg_src:|ifname:
 ```
 
-#### `test_topology1_remote_igp_failure`
+#### `test_remote_igp_failure`
 
-**testcase_name:** `"t1_remote_igp"`
+**testcase_name:** `"remote_igp"`
+
+This is the unfiltered IGP failure test. Uses `TOPO2_STATIC_ROUTES` (direct + recursive mix).
+
+**Setup:**
+```python
+apply_config_cmmds_to_vtysh(duthost, TOPO2_STATIC_ROUTES)
+wait_for_vrf_route_recursive_paths(
+    duthost, "Vrf1", "192.100.0.1",
+    ["2064:100::1d", "2064:200::1e"],
+    poll_interval=10, timeout=300,
+    remote_host=pe1_host, remote_clear_target="2064:300::1f")
+```
 
 **Trigger (sequential):**
 ```
 Step 1: p1.command("sudo ifconfig Ethernet112 down")
         → time.sleep(40)  (route replace event cools down, ASIC offload settles)
-        → start instrumentation (turn_on_off_frr_debug + start_record_collection)
+        → start instrumentation (turn_on_off_frr_debug with extended debug_cmds + start_record_collection)
 Step 2: p3.command("sudo ifconfig Ethernet4 down")
 ```
 First link causes a route replacement (PE1 reconverges via remaining uplink). The 40s gap lets the replacement fully settle (including NHT re-evaluation after ASIC offload notification) before the second link triggers full withdrawal of `2064:100::1d`, exercising PIC edge handling.
@@ -3540,10 +3788,115 @@ First link causes a route replacement (PE1 reconverges via remaining uplink). Th
 - `assert_appdb_nexthop_removed(duthost, "2064:100::1d", timeout=30)`
 - `assert_appdb_nexthop_present(duthost, "2064:200::1e")`
 
-**Verification:** None — in the remote IGP failure scenario, BGP does not give priority to infra route updates over VRF route updates, so we cannot reliably verify PIC NHG ordering from the swss record file.
+**Verification:** None — BGP path hunting causes transient route-replace churn, making strict PIC ordering unreliable from swss record.
 
-**Recovery:** `p1.command("sudo ifconfig Ethernet112 up")` + `p3.command("sudo ifconfig Ethernet4 up")`, wait 15s
+**Recovery:**
+```python
+p1.command("sudo ifconfig Ethernet112 up")
+p3.command("sudo ifconfig Ethernet4 up")
+time.sleep(30)
+pe1_host.command("vtysh -c 'clear bgp 2064:300::1f'", module_ignore_errors=True)
+duthost.command("vtysh -c 'clear bgp 2064:100::1d'", module_ignore_errors=True)
+wait_for_vrf_route_recursive_paths(
+    duthost, "Vrf1", "192.100.0.1",
+    ["2064:100::1d", "2064:200::1e"],
+    poll_interval=10, timeout=300,
+    remote_host=pe1_host, remote_clear_target="2064:300::1f")
+apply_config_cmmds_to_vtysh(duthost, TOPO2_STATIC_ROUTES_REMOVE)
+```
+In this test case, we can't apply strict PIC check due to transient routes updates. Therefore we create the following test case to filter out unneeded bgp route updates to avoid these transient updates.
 
+#### `test_remote_igp_failure_filtered`
+
+**testcase_name:** `"remote_igp_filtered"`
+
+This test adds AS-path filters and `bgp suppress-fib-pending` to prevent path hunting, producing a clean single withdrawal of `2064:100::1d`. Uses `TOPO2_STATIC_ROUTES`.
+
+**Pre-setup** (AS-path filter application):
+```python
+apply_config_cmmds_to_vtysh(p2, P2_OUTBOUND_FILTER)
+apply_config_cmmds_to_vtysh(p4, P4_OUTBOUND_FILTER)
+apply_config_cmmds_to_vtysh(duthost, PE3_INBOUND_FILTER)
+duthost.command("vtysh -c 'configure terminal' -c 'router bgp 64602' "
+                "-c 'bgp suppress-fib-pending'")
+p2.command("sudo vtysh -c 'clear bgp ipv6 unicast fc08::1 soft out'")
+p4.command("sudo vtysh -c 'clear bgp ipv6 unicast fc06::1 soft out'")
+time.sleep(10)
+apply_config_cmmds_to_vtysh(duthost, TOPO2_STATIC_ROUTES)
+```
+
+**Setup:**
+```python
+wait_for_vrf_route_recursive_paths(
+    duthost, "Vrf1", "192.100.0.1",
+    ["2064:100::1d", "2064:200::1e"],
+    poll_interval=10, timeout=300,
+    remote_host=pe1_host, remote_clear_target="2064:300::1f")
+```
+
+**Trigger (sequential):**
+```
+Step 1: p1.command("sudo ifconfig Ethernet112 down")
+        → time.sleep(40)
+        → start instrumentation (turn_on_off_frr_debug with extended debug_cmds + start_record_collection)
+Step 2: p3.command("sudo ifconfig Ethernet4 down")
+```
+
+**Post-trigger assertions:**
+- `assert_appdb_nexthop_removed(duthost, "2064:100::1d", timeout=30)`
+- `assert_appdb_nexthop_present(duthost, "2064:200::1e")`
+
+**Verification:**
+- `verify_pic_nhg_switch(duthost, testcase_name, "2064:200::1e")` — verifies PIC NHG switch to backup nexthop.
+
+**Recovery:**
+```python
+p1.command("sudo ifconfig Ethernet112 up")
+p3.command("sudo ifconfig Ethernet4 up")
+time.sleep(30)
+# Remove suppress-fib-pending and AS-path filters
+duthost.command("vtysh -c 'configure terminal' -c 'router bgp 64602' "
+                "-c 'no bgp suppress-fib-pending'")
+apply_config_cmmds_to_vtysh(p2, P2_OUTBOUND_FILTER_REMOVE)
+apply_config_cmmds_to_vtysh(p4, P4_OUTBOUND_FILTER_REMOVE)
+apply_config_cmmds_to_vtysh(duthost, PE3_INBOUND_FILTER_REMOVE)
+p2.command("sudo vtysh -c 'clear bgp ipv6 unicast fc08::1 soft out'")
+p4.command("sudo vtysh -c 'clear bgp ipv6 unicast fc06::1 soft out'")
+pe1_host.command("vtysh -c 'clear bgp 2064:300::1f'", module_ignore_errors=True)
+duthost.command("vtysh -c 'clear bgp 2064:100::1d'", module_ignore_errors=True)
+wait_for_vrf_route_recursive_paths(
+    duthost, "Vrf1", "192.100.0.1",
+    ["2064:100::1d", "2064:200::1e"],
+    poll_interval=10, timeout=300,
+    remote_host=pe1_host, remote_clear_target="2064:300::1f")
+apply_config_cmmds_to_vtysh(duthost, TOPO2_STATIC_ROUTES_REMOVE)
+```
+Here is an example swss record file which shows PIC edge kicks in via update SONiC NHG 9 to one path 2064:200::1e. Later all VRF routes would be updated to a different SONIC NHG 4 which is for 2064:200::1e path only.
+```
+2026-06-10.03:08:37.984729|NEXTHOP_GROUP_TABLE:9|SET|nexthop:2064:200::1e|ifname:unknown|weight:1|seg_src:2064:300::1f
+2026-06-10.03:08:37.985969|ROUTE_TABLE:fd00:201:201:1::/64|SET|nexthop:fc06::2|ifname:Ethernet12|protocol:bgp
+2026-06-10.03:08:37.986239|ROUTE_TABLE:2064:100::1d|DEL
+2026-06-10.03:08:37.986290|ROUTE_TABLE:fd00:201:201:11::/64|SET|nexthop:fc06::2|ifname:Ethernet12|protocol:bgp
+2026-06-10.03:08:37.986333|ROUTE_TABLE:fc02::/120|SET|nexthop:fc06::2|ifname:Ethernet12|protocol:bgp
+2026-06-10.03:08:37.986414|ROUTE_TABLE:fc00::70/126|SET|nexthop:fc06::2|ifname:Ethernet12|protocol:bgp
+2026-06-10.03:08:38.020652|ROUTE_TABLE:1::1|SET|nexthop_group:1|protocol:0xc4
+2026-06-10.03:08:38.565735|NEXTHOP_GROUP_TABLE:8|SET|nexthop:2064:100::1d|ifname:unknown|seg_src:2064:300::1f
+2026-06-10.03:08:38.568041|ROUTE_TABLE:fc00::70/126|DEL
+2026-06-10.03:08:38.568280|ROUTE_TABLE:Vrf1:192.100.0.8|SET|pic_context_id:1|nexthop_group:4|nexthop:|vpn_sid:|seg_src:|ifname:
+2026-06-10.03:08:38.568334|ROUTE_TABLE:Vrf1:192.100.0.4|SET|pic_context_id:1|nexthop_group:4|nexthop:|vpn_sid:|seg_src:|ifname:
+2026-06-10.03:08:38.568467|ROUTE_TABLE:Vrf1:192.100.0.6|SET|pic_context_id:1|nexthop_group:4|nexthop:|vpn_sid:|seg_src:|ifname:
+2026-06-10.03:08:38.568558|ROUTE_TABLE:fc02::/120|DEL
+2026-06-10.03:08:38.568645|ROUTE_TABLE:fd00:201:201:1::/64|DEL
+2026-06-10.03:08:38.568693|ROUTE_TABLE:Vrf1:192.100.0.1|SET|pic_context_id:1|nexthop_group:4|nexthop:|vpn_sid:|seg_src:|ifname:
+2026-06-10.03:08:38.568737|ROUTE_TABLE:Vrf1:192.100.0.9|SET|pic_context_id:1|nexthop_group:4|nexthop:|vpn_sid:|seg_src:|ifname:
+2026-06-10.03:08:38.568820|ROUTE_TABLE:Vrf1:192.100.0.5|SET|pic_context_id:1|nexthop_group:4|nexthop:|vpn_sid:|seg_src:|ifname:
+2026-06-10.03:08:38.568871|ROUTE_TABLE:Vrf1:192.100.0.7|SET|pic_context_id:1|nexthop_group:4|nexthop:|vpn_sid:|seg_src:|ifname:
+2026-06-10.03:08:38.568958|ROUTE_TABLE:fd00:201:201:11::/64|DEL
+2026-06-10.03:08:38.569003|ROUTE_TABLE:Vrf1:192.100.0.2|SET|pic_context_id:1|nexthop_group:4|nexthop:|vpn_sid:|seg_src:|ifname:
+2026-06-10.03:08:38.569089|ROUTE_TABLE:Vrf1:192.100.0.3|SET|pic_context_id:1|nexthop_group:4|nexthop:|vpn_sid:|seg_src:|ifname:
+2026-06-10.03:08:38.569138|ROUTE_TABLE:Vrf1:192.100.0.10|SET|pic_context_id:1|nexthop_group:4|nexthop:|vpn_sid:|seg_src:|ifname:
+
+```
 
 #### `test_topology2_local_failure`
 
@@ -3588,32 +3941,57 @@ BGP NOTIFICATION sent immediately → clean single ROUTE_DELETE, no intermediate
 ```python
 pe1_host.command("vtysh -c 'configure terminal' -c 'router bgp 64600' "
                  "-c 'no neighbor 2064:300::1f shutdown'")
+time.sleep(10)
+pe1_host.command("vtysh -c 'clear bgp 2064:300::1f'", module_ignore_errors=True)
+duthost.command("vtysh -c 'clear bgp 2064:100::1d'", module_ignore_errors=True)
+wait_for_vrf_route_recursive_paths(
+    duthost, "Vrf1", "192.100.0.1",
+    ["2064:100::1d", "2064:200::1e"],
+    poll_interval=10, timeout=300,
+    remote_host=pe1_host, remote_clear_target="2064:300::1f")
 ```
-Wait 20s.
 
 **Recovery path check:** verify both `2064:100::1d` and `2064:200::1e` are present again.
 
 
-#### `test_topology2_remote_igp_failure`
+#### Existing Test Modifications
 
-**testcase_name:** `"t2_remote_igp"`
+Three existing traffic tests are modified to improve reliability:
 
-**Trigger (sequential):**
+##### `test_traffic_check_via_trex`
+Added pre-condition route verification at the start:
+```python
+pe1 = nbrhosts["PE1"]['host']
+time.sleep(60)
+wait_for_vrf_route_recursive_paths(
+    duthost, "Vrf1", "192.100.0.1",
+    ["2064:100::1d", "2064:200::1e"],
+    poll_interval=10, timeout=300,
+    remote_host=pe1, remote_clear_target="2064:300::1f")
 ```
-Step 1: p1.command("sudo ifconfig Ethernet112 down")
-        → time.sleep(40)
-        → start instrumentation
-Step 2: p3.command("sudo ifconfig Ethernet4 down")
+
+##### `test_traffic_check_remote_igp_fail_case`
+Recovery section replaced `time.sleep(sleep_duration)` + `check_bgp_neighbors_func` with:
+```python
+time.sleep(30)
+wait_for_vrf_route_recursive_paths(
+    pe3, "Vrf1", "192.100.0.1",
+    ["2064:100::1d", "2064:200::1e"],
+    poll_interval=10, timeout=300,
+    remote_host=pe1, remote_clear_target="2064:300::1f")
 ```
-Same rationale as topology 1 IGP failure. Topology 2's direct + recursive mix means the withdrawal triggers PIC edge handling across both direct-path (2::2, 3::3) and recursive-path (1::1) NHGs.
 
-**Post-trigger assertions:**
-- `assert_appdb_nexthop_removed(duthost, "2064:100::1d", timeout=30)`
-- `assert_appdb_nexthop_present(duthost, "2064:200::1e")`
-
-**Verification:** None (same reasoning as topology 1 IGP failure).
-
-**Recovery:** `p1.command("sudo ifconfig Ethernet112 up")` + `p3.command("sudo ifconfig Ethernet4 up")`, wait 15s
+##### `test_traffic_check_remote_bgp_fail_case`
+Recovery section replaced `time.sleep(sleep_duration)` + `check_bgp_neighbors_func` with:
+```python
+time.sleep(30)
+pe1.command("vtysh -c 'clear bgp 2064:300::1f'", module_ignore_errors=True)
+wait_for_vrf_route_recursive_paths(
+    pe3, "Vrf1", "192.100.0.1",
+    ["2064:100::1d", "2064:200::1e"],
+    poll_interval=10, timeout=300,
+    remote_host=pe1, remote_clear_target="2064:300::1f")
+```
 
 # 9. Appendix
 This section documents all the issues met when using LLM to brainstorm, code generation, compile and testing. The main skills are similar to skills listed in https://github.com/obra/superpowers/tree/main/skills and https://github.com/numman-ali/openskills. At high level, we use brainstorm skill to go over LLD in detail and use writing-plan skill to generate codes after brainstorming.
