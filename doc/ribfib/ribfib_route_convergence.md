@@ -26,7 +26,7 @@
       - [Include Dependency](#include-dependency)
     - [Dependents change while an install is in flight (QUEUED)](#dependents-change-while-an-install-is-in-flight-queued)
     - [NHG revived from KEEP\_AROUND (delayed-delete)](#nhg-revived-from-keep_around-delayed-delete)
-- [4. FPM Message Serialization (SONiC Integration)](#4-fpm-message-serialization-sonic-integration)
+- [4. FPM Message Serialization (SONiC Integration in sonic-buildimage)](#4-fpm-message-serialization-sonic-integration-in-sonic-buildimage)
   - [Include Dependency](#include-dependency-1)
   - [Custom Message Type](#custom-message-type)
   - [Encoder Function: `netlink_nhtevent_msg_encode()`](#encoder-function-netlink_nhtevent_msg_encode)
@@ -36,6 +36,10 @@
     - [Debug Logging](#debug-logging)
     - [Memory](#memory)
   - [Switch Case in `fpm_nl_enqueue()`](#switch-case-in-fpm_nl_enqueue)
+  - [Some other misc changes](#some-other-misc-changes)
+    - [Fix for RTM\_DELNHGFIB check](#fix-for-rtm_delnhgfib-check)
+    - [Pass is\_recursive to nexthopgroupfull\_json\_from\_c\_nhg\_multi](#pass-is_recursive-to-nexthopgroupfull_json_from_c_nhg_multi)
+    - [Enable /var/log/swss as rw directory in fpm-frr docker](#enable-varlogswss-as-rw-directory-in-fpm-frr-docker)
 - [5. SONiC-fib Enhancements for NHT events](#5-sonic-fib-enhancements-for-nht-events)
   - [NhtEvent JSON Schema](#nhtevent-json-schema)
     - [Example: nexthop becomes unresolved (Phase 1 trigger)](#example-nexthop-becomes-unresolved-phase-1-trigger)
@@ -647,10 +651,8 @@ diff --git a/zebra/zebra_nhg.c b/zebra/zebra_nhg.c
 The flag is propagated to direct depends because PIC convergence needs each member group re-notified. A parent-only re-emit would leave the leaf groups absent from the FPM-side cache.
 
 
-# 4. FPM Message Serialization (SONiC Integration)
-
-**File**: `src/sonic-frr/dplane_fpm_sonic/dplane_fpm_sonic.c`
-
+# 4. FPM Message Serialization (SONiC Integration in sonic-buildimage)
+The main changes are FPM NHT message serialziation related, which would be in **File**: `src/sonic-frr/dplane_fpm_sonic/dplane_fpm_sonic.c`
 ## Include Dependency
 
 Add at the top with existing sonic-fib includes:
@@ -754,6 +756,68 @@ case DPLANE_OP_NHT_EVENT_UPDATE:
 ```
 
 This follows the same error-handling pattern as other encoder call sites: on failure, set status and return 0 (message not enqueued).
+
+## Some other misc changes
+
+### Fix for RTM_DELNHGFIB check
+Need to pick the following change if the workspace doesn't have https://github.com/sonic-net/sonic-buildimage/pull/26486.
+
+```
+@@ -2515,7 +2635,10 @@ cleanup:
+                free(json_str);
+                free_c_nexthopgroupfull(&c_nhg);
+
+-       } else if (cmd != RTM_DELNHGFIB) {
++       } else if (cmd == RTM_DELNHGFIB) {
++               /* Delete only needs NHA_ID, already encoded above */
++               ret = NLMSG_ALIGN(req->n.nlmsg_len);
++       } else {
+                zlog_err(
+                        "%s: Nexthop group kernel update command (%d) does not exist",
+                        __func__, cmd);
+```
+
+### Pass is_recursive to nexthopgroupfull_json_from_c_nhg_multi
+For recursive NH case, we need to collect its gateway address and protocol type. Therefore, we need to give a hint to `nexthopgroupfull_json_from_c_nhg_multi()`.
+
+Note: we don't want `sonic-fi`b include frr header files for avoding circular dependency. Therefore, we need to make this check before entering `sonic-fib` codes.
+
+In `build_c_nexthopgroupfull_multi()`, we could have the following codes to check if it is a recursive NH.
+
+```
+@@ -1071,6 +1074,19 @@ static void build_c_nexthopgroupfull_multi(struct C_NextHopGroupFull *c_nhg,
+
+        /* set nhg_flags */
+        c_nhg->nhg_flags = dplane_ctx_get_nhe_nhg_flags(ctx);
++       bool is_recurisve = false;
++       /*
++        * For recursive NH, we keep the nexthop information for convergence handling
++        */
++       if (CHECK_FLAG(c_nhg->nhg_flags, NEXTHOP_GROUP_RECURSIVE)) {
++               const struct nexthop *nh = nhg->nexthop;
++               memcpy(&c_nhg->gate, &nh->gate, sizeof(union g_addr));
++
++               /* set nexthop type */
++               c_nhg->type = nh->type;
++
++               is_recurisve = true;
++       }
+```
+We also want to check the signiture of this function as bool to return `is_recurisve`. This flag would be return
+
+### Enable /var/log/swss as rw directory in fpm-frr docker
+Since we want to record nhg events between zebra and fpmsyncd, we mount /var/log/swss as rw directory in fpm-frr docker.
+```
+diff --git a/rules/docker-fpm-frr.mk b/rules/docker-fpm-frr.mk
+index 1b124c14a..700130839 100644
+--- a/rules/docker-fpm-frr.mk
++++ b/rules/docker-fpm-frr.mk
+@@ -31,6 +31,7 @@ $(DOCKER_FPM_FRR)_CONTAINER_NAME = bgp
+ $(DOCKER_FPM_FRR)_RUN_OPT += -t --cap-add=NET_ADMIN --cap-add=SYS_ADMIN
+ $(DOCKER_FPM_FRR)_RUN_OPT += -v /etc/sonic:/etc/sonic:ro
+ $(DOCKER_FPM_FRR)_RUN_OPT += -v /etc/localtime:/etc/localtime:ro
++$(DOCKER_FPM_FRR)_RUN_OPT += -v /var/log/swss:/var/log/swss:rw
+```
 
 # 5. SONiC-fib Enhancements for NHT events
 A new JSON schema `NhtEvent.json` is added to the [sonic-fib](https://github.com/eddieruan-alibaba/sonic-fib) repository, following the same template-driven generation pattern as `NextHopGroupFull.json`.
