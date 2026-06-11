@@ -80,6 +80,11 @@
       - [`RIBNHGTable::addNHGDependents()` / `removeNHGDependents()`](#ribnhgtableaddnhgdependents--removenhgdependents)
     - [Method Update: `RIBNHGEntry::checkNeedUpdate()`](#method-update-ribnhgentrycheckneedupdate)
     - [Method Update: `NHGMgr::updateExistingNHGFull()`](#method-update-nhgmgrupdateexistingnhgfull)
+    - [`NEXTHOP_FLAG_ACTIVE` Filtering in `getNextHopGroupFields()`](#nexthop_flag_active-filtering-in-getnexthopgroupfields)
+    - [`fpmsync.rec` Recorder Infrastructure](#fpmsyncrec-recorder-infrastructure)
+    - [`onSrv6VpnRouteMsg()` Simplification](#onsrv6vpnroutemsg-simplification)
+    - [`NHG_FULL_STATE_TABLE` Debug Writes in `onNextHopGroupFullMsg()`](#nhg_full_state_table-debug-writes-in-onnexthopgroupfullmsg)
+    - [`RIBNHGTable::delEntry()` Return Type](#ribnhgtabledelentry-return-type)
     - [Method Update: `NHGMgr::addNewNHGFull()` — Index Map Population](#method-update-nhgmgraddnewnhgfull--index-map-population)
     - [Method Update: `NHGMgr::delNHGFull()` — Index Map Cleanup](#method-update-nhgmgrdelnhgfull--index-map-cleanup)
     - [`backwalk` Parameter Threading](#backwalk-parameter-threading)
@@ -131,6 +136,7 @@
       - [Function-Level Unit Tests](#function-level-unit-tests)
     - [Build Integration](#build-integration)
     - [Topology JSON Files](#topology-json-files)
+    - [Existing Test Helper Modification](#existing-test-helper-modification)
     - [Main Test Flow](#main-test-flow)
   - [8.4 sonic-mgmt system level tests](#84-sonic-mgmt-system-level-tests)
     - [8.4.1 7-Node Topology Key Connections](#841-7-node-topology-key-connections)
@@ -1221,7 +1227,7 @@ void RouteSync::onNhtEventMsg(struct nlmsghdr *h, int len)
 **Key design points**:
 1. Uses `struct rtmsg` + `RTM_RTA(rtm)` to extract attributes (matching the encoder's format).
 2. JSON deserialization is wrapped in `try/catch` to handle malformed messages gracefully.
-3. Early-return with debug log when `curr_resolved_nhg_id != 0` — Phase 1 only handles nexthop-unreachable events.
+3. Early-return with debug log when `curr_resolved_nhg_id != 0` or `prev_resolved_nhg_id == 0` — Phase 1 only handles nexthop from reachable to unreachable events.
 4. The `rnh_prefix` (e.g., `"fc06::2/128"`) is stripped of its prefix length to produce the nexthop address for the backwalk.
 
 ## `fib_nhg_trigger_node_quick_fixup()`
@@ -1254,7 +1260,7 @@ Locates the starting RIBNHGEntries for the global table context and triggers a b
 **For each global entry**, it initializes a `fib_nhg_walking_ctx` structure with the following configuration:
 * **Walk context fields**:
   * `visited_node_set`: Starts as an empty `std::set<uint32_t>`. Nodes are added one by one as they are visited.
-    * *Note: Even if a node is already present in the visited set, the algorithm may still initiate a forward walk to its dependents to propagate any pending updates.*
+    * *Note: Even if a node is already present in the visited set, the algorithm may still initiate a forward walk to its dependents to propagate any pending updates. This could happen in diamond shape graph for depends / dependencies.
   * `modified_node_set`: Starts as an empty `std::set<uint32_t>`. When walk_spec applies a fixup to a node (gateway match or depends propagation), that node ID is added. Downstream nodes check whether any of their depends entries appear in this set to determine relevance.
   * `rib_nhg_table`: Pointer to the `RIBNHGTable` for entry lookups during traversal.
 * **Walk Specification**: Set to `fib_nhg_walk_spec_for_node_quick_fixup` in part 1, which defines the operations to perform on each visited node.
