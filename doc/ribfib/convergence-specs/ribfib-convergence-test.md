@@ -82,7 +82,7 @@ Predefined topology JSON + injected event → verify APPDB changes.
 
 ## 5. sonic-mgmt system tests — end to end
 
-**Location:** `sonic-mgmt/tests/srv6/` on branch `ribfib_2_yuqing`. Reuse the framework Eddie already built (`srv6_utils.py` helpers + the pattern in `test_srv6_basic_sanity.py`).
+**Location:** `sonic-mgmt/tests/srv6/` on branch `ribfib_2_yuqing`. Reuse the existing framework (`srv6_utils.py` helpers + the pattern in `test_srv6_basic_sanity.py`).
 
 ### 5.1 Baseline (kept untouched, used as regression baseline)
 

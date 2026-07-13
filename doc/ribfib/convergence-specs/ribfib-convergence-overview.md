@@ -145,7 +145,7 @@ All tests are consolidated in the test sub-spec. Three-layer split:
 
 **Key new helper** (`sonic-mgmt/tests/srv6/srv6_utils.py`): `verify_nhg_before_routes()` — parses `swss.rec` and asserts the NHG_TABLE SET timestamp precedes the ROUTE_TABLE SET timestamp.
 
-**Baseline:** Eddie's 4 existing cases are kept as a regression baseline; this cycle adds 3 new cases (SRv6 gateway prune / topology1 timing / no route flap).
+**Baseline:** the 4 existing cases are kept as a regression baseline; this cycle adds 3 new cases (SRv6 gateway prune / topology1 timing / no route flap).
 
 ---
 

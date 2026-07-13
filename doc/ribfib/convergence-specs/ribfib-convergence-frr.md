@@ -33,7 +33,10 @@ DPLANE_OP_NHT_EVENT_UPDATE,
 
 In `zebra/zebra_dplane.c`:
 - Add a `dplane_op2str()` branch for the new op.
-- Add the constructor `dplane_nht_event_update(struct rnh *rnh, const struct prefix *prev_resolved_prefix, uint32_t prev_resolved_nhg_id)` that allocates a ctx and enqueues it.
+- Add the constructor `dplane_nht_event_update(const struct prefix *rnh_prefix, const struct prefix *prev_resolved_prefix, uint32_t prev_resolved_nhg_id, const struct prefix *curr_resolved_prefix, uint32_t curr_resolved_nhg_id)` that allocates a ctx and enqueues it.
+- The constructor takes **5 independent fields** (not a `struct rnh *`) so the dplane layer does not depend on RNH internals. This allows both recursive nexthop changes and local-link-down events to share the same constructor — the caller simply passes the appropriate prefix/nhg_id values regardless of how they were obtained.
+- **Dispatch**: the ctx is enqueued via `dplane_update_enqueue()` — the standard dplane provider chain entry — so the event traverses all providers including the FPM provider. Using `dplane_provider_enqueue_to_zebra()` would bypass the FPM provider entirely.
+- **skip_kernel**: the ctx is marked `dplane_ctx_set_skip_kernel()` before enqueueing, because NHT events are informational notifications for the FPM and must not be processed by the kernel provider.
 - Add the corresponding `case` in every `-Wswitch-enum` switch over `enum dplane_op_e` inside `zebra_dplane.c` (3 spots).
 
 > **Note:** do **not** touch `dplane_fpm_nl.c` — in this build it is replaced at runtime by the SONiC-specific `dplane_fpm_sonic.c` provider.
@@ -152,15 +155,15 @@ static void zebra_rnh_eval_nexthop_entry(struct zebra_vrf *zvrf, afi_t afi,
 
 ---
 
-## 4A. Second trigger point: local link down (directly-connected nexthop)
+## 4A. Second trigger point: local link down (directly-connected member)
 
 ### 4A.1 The gap
 
-Section 4 covers only nexthops that carry an **RNH (Nexthop Tracker)** registration — i.e. *recursive* nexthops learned via BGP/IGP. A **directly-connected** nexthop (e.g. `fc06::2` reachable over `Ethernet12` as a connected `/120`) has **no RNH**. When its egress interface goes down, `zebra_rnh_eval_nexthop_entry()` is never invoked for it (zebra logs `"<pfx> has no tracking NHTs. Bailing"`), so **no NHT event is emitted** and fpmsyncd's backwalk never fires.
+Section 4 covers only nexthops that carry an **RNH (Nexthop Tracker)** registration — i.e. *recursive* nexthops learned via BGP/IGP. A **directly-connected** member of an ECMP group (e.g. `fc06::2` reachable over `Ethernet12` as a connected `/120`) has **no RNH**. When its egress interface goes down, `zebra_rnh_eval_nexthop_entry()` is never invoked for it, so the §4 trigger does not apply.
 
-Observed symptom (system test `test_topology1_local_failure` / `test_topology2_local_failure`): after `ifconfig Ethernet12 down`, the dead nexthop `fc06::2` is **not** pruned from any global `NEXTHOP_GROUP_TABLE` entry; `swss.rec` shows zero `NEXTHOP_GROUP_TABLE:N SET` ops; only the full-resync slow path runs.
+Observed symptom (system tests `test_topology1_local_failure` / `test_topology2_local_failure`): after `ifconfig Ethernet12 down`, the dead member `fc06::2` is **not** pruned from the affected `NEXTHOP_GROUP_TABLE` entries in APPL_DB; the composite group and the groups stacked on top of it keep advertising the stale member to the FPM.
 
-### 4A.2 Where the interface-down path already lives
+### 4A.2 What already happens on link down
 
 `if_down()` (`zebra/interface.c`) already walks the per-interface NHG list on link down:
 
@@ -168,43 +171,51 @@ Observed symptom (system test `test_topology1_local_failure` / `test_topology2_l
 if_down(ifp)
   → if_down_nhg_dependents(ifp)                 // interface.c
       frr_each(nhg_connected_tree, &zif->nhg_dependents, rb_node_dep)
-          zebra_nhg_check_valid(rb_node_dep->nhe);   // marks NHG invalid only
+          zebra_nhg_check_valid(rb_node_dep->nhe);
+  → rib_update_handle_vrf_all(RIB_UPDATE_INTERFACE_DOWN, ...)   // RIB re-eval
 ```
 
-`zif->nhg_dependents` is exactly the set of NHGs whose egress interface is `ifp`; the directly-connected singleton NHGs for that link are in it. This is the natural, already-iterating trigger point — it runs synchronously before the async RIB re-evaluation.
+`zebra_nhg_check_valid()` → `zebra_nhg_set_valid()` walks the dependents of the failed singleton and, using a **weight-insensitive** nexthop comparison (`nexthop_same_no_weight`), clears `NEXTHOP_FLAG_ACTIVE` on the matching member inside each composite group. (The weight-insensitive compare matters: a directly-connected nexthop has `weight = 1` on its own but is stored with a normalized weight once it becomes a group member, so an exact compare would miss it.)
 
-### 4A.3 Change
+So the member is correctly marked inactive, and the subsequent RIB re-evaluation re-visits the affected composite groups through `zebra_nhg_install_kernel()`.
 
-Add a second emit entry point that does **not** require a `struct rnh`, and call it from `if_down_nhg_dependents()` for each directly-connected singleton nhe:
+### 4A.3 The missing piece
 
-- New constructor `dplane_nht_event_update_connected(const struct nexthop *nh, uint32_t prev_resolved_nhg_id)` in `zebra/zebra_dplane.c`:
-  - Gated by `zebra_nhg_fib_enabled` (same knob as §6); returns immediately when off or when `nh == NULL`.
-  - Builds a host prefix (`/32` or `/128`) from `nh->gate` as `rnh_prefix` (this is the bare nexthop address fpmsyncd strips and uses as its lookup key).
-  - Sets `prev_resolved_nhg_id = nhe->id` (the singleton's own zebra NHG id — the start point for fpmsyncd `backwalkPicCore`).
-  - Sets `curr_resolved_nhg_id = 0` and a zeroed `curr_resolved_prefix` (nexthop is now unreachable → satisfies the Phase 1 gate).
-  - Leaves `prev_resolved_prefix` zeroed (unused by the connected-nexthop backwalk).
-- In `if_down_nhg_dependents()`, for each `rb_node_dep->nhe` that is a singleton (`ZEBRA_NHG_IS_SINGLETON`) with an IPv4/IPv6 gate, call the new constructor with `nhe->id` **before** `zebra_nhg_check_valid()` clears its flags.
+When only one member of an ECMP composite goes inactive, the composite **stays valid** (it still has another active member) and therefore stays `INSTALLED` / `INSTALLED_FPM_ONLY`. The install condition in `zebra_nhg_install_kernel()` only re-sends a group when it is not yet installed **or** carries an explicit reinstall marker:
 
-### 4A.4 Why fpmsyncd needs no change
+```
+VALID && ( !(INSTALLED || INSTALLED_FPM_ONLY)
+           || REINSTALL || REINSTALL_FPM_ONLY ) && !QUEUED
+```
 
-fpmsyncd already stores every received NHG — including directly-connected singletons — in its `RIBNHGEntry` map (`addNHGFull` → `m_nhg_map.insert`). Therefore `backwalkPicCore(prev_resolved_nhg_id, failedNh)` resolves the singleton start entry, detects `isDirectNexthop`, disables it, and walks its dependents to rewrite the affected **global** composite NHGs in APPL_DB. The event supplies `prev_resolved_nhg_id = singleton nhe->id`, so the existing PIC-core path handles it end-to-end; the VRF-only `backwalkPicEdge` fallback is not relied upon here.
+An already-installed, still-valid composite with no reinstall marker fails this test, so nothing is re-sent to the FPM and the stale member persists. The dataplane serializer skips per-member `NEXTHOP_FLAG_ACTIVE` on purpose (received groups must keep inactive members represented), so the pruning has to be expressed by **re-sending the group** with the inactive member excluded from its resolved set — not by editing the member in place.
 
-### 4A.5 Field contract for the connected-nexthop event
+### 4A.4 Change: flag the affected closure for FPM-only reinstall
 
-| Field | Value |
-|-------|-------|
-| `rnh_prefix` | host prefix of `nh->gate` (e.g. `fc06::2/128`) — fpmsyncd strips `/len` → `fc06::2` |
-| `prev_resolved_prefix` | zeroed (unused) |
-| `prev_resolved_nhg_id` | `nhe->id` of the directly-connected singleton (start point for `backwalkPicCore`) |
-| `curr_resolved_prefix` | zeroed |
-| `curr_resolved_nhg_id` | `0` (unreachable — passes Phase 1 gate) |
+Add a recursive helper `zebra_nhg_flag_reinstall_fpm()` in `zebra/zebra_nhg.c` and call it from **`if_down_nhg_dependents()`** (`zebra/interface.c`) — the interface-down entry point. After `zebra_nhg_check_valid()` marks each directly-connected singleton invalid, the helper is called on each composite NHG in the singleton's `nhg_dependents` tree:
+
+- The helper sets `NEXTHOP_GROUP_REINSTALL_FPM_ONLY` on the composite and recurses into `nhe->nhg_dependents`, so **every group stacked on top of the composite** (e.g. VPN / recursive parents that flatten the same member) is flagged too. This is required because each group materializes its own flattened member list; re-sending only the base composite would leave the parents stale.
+- It only flags groups that are gated by `zebra_nhg_fib_enabled` and were already pushed to the dataplane (`INSTALLED` or `INSTALLED_FPM_ONLY`).
+- The flag itself doubles as a visited-guard, so the dependents DAG is walked once per node.
+
+**Why `if_down_nhg_dependents` and not `zebra_nhg_set_valid`:** `set_valid` is a generic primitive invoked during NHG deletion, VRF teardown, and shutdown — placing the reinstall trigger there risks spurious FPM updates in unrelated teardown paths. By placing it in `if_down_nhg_dependents` the trigger is explicitly scoped to interface failure events only.
+
+The RIB re-evaluation that `if_down()` already triggers then re-visits these groups; with `REINSTALL_FPM_ONLY` set the install condition fires, the group is re-serialized (the inactive member is left out of the resolved set), and the update is sent **FPM-only** — the kernel already reflects the interface going down, so kernel programming is skipped.
+
+### 4A.5 Flag lifecycle
+
+`NEXTHOP_GROUP_REINSTALL_FPM_ONLY` is consumed and cleared by the existing dplane path when the group is enqueued for install (it sets skip-kernel and unsets the flag). If the group was mid-install (`QUEUED`) when flagged, the post-install callback re-triggers one more install so the flag is honored and then cleared. No new clearing logic is introduced.
+
+### 4A.6 Why fpmsyncd needs no change
+
+Each affected group is re-sent through the normal NHG update path. fpmsyncd processes it as an ordinary group update and rewrites the corresponding `NEXTHOP_GROUP_TABLE` entry in APPL_DB with the pruned member list. No new message type, event, or consumer logic is added on the fpmsyncd side.
 
 ---
 
 ## 5. Error handling and corner cases
 
-- `dplane_nht_event_update()` returns immediately when `rnh == NULL`; nothing is enqueued.
-- `dplane_nht_event_update_connected()` returns immediately when `nh == NULL`, when `zebra_nhg_fib_enabled` is off, or when the nexthop gate is neither IPv4 nor IPv6 (defensive); nothing is enqueued.
+- `dplane_nht_event_update()` returns immediately when `rnh_prefix == NULL`; nothing is enqueued.
+- `zebra_nhg_flag_reinstall_fpm()` (§4A) is a no-op when `--nhg-fib` is off, when the group was not already pushed to the dataplane, or when it is already flagged (visited-guard); it never edits members in place and never touches kernel state.
 - ctx allocation failure → log an error, drop the event, do not block the zebra main loop.
 - FPM socket not connected → reuse the existing dplane pending queue; the NHT event shares the same queue (no new queue).
 - If the caller passes NULL for `route_entry_queued`, resolve skips the assignment and behaves like the original logic (defensive).
@@ -221,10 +232,12 @@ fpmsyncd already stores every received NHG — including directly-connected sing
 
 ## 7. Files touched
 
-- `zebra/zebra_dplane.h` — new enum + `struct dplane_nht_info` + accessor declarations + `dplane_nht_event_update_connected()` declaration.
-- `zebra/zebra_dplane.c` — `dplane_nht_event_update()` + `dplane_nht_event_update_connected()` (connected-nexthop trigger, §4A) + ctx handling + `dplane_op2str()` + switch-enum cases.
-- `zebra/zebra_rnh.c` — (1) add out parameter `route_entry_queued` to `zebra_rnh_resolve_nexthop_entry()`; (2) extend `zebra_rnh_eval_nexthop_entry()` signature and insert the trigger (`state_changed && !route_entry_queued`); (3) `zebra_rnh_clear_nhc_flag()` passes NULL for the new argument.
-- `zebra/interface.c` — in `if_down_nhg_dependents()`, emit `dplane_nht_event_update_connected()` for each directly-connected singleton nhe before `zebra_nhg_check_valid()` (§4A).
+- `zebra/zebra_dplane.h` — new enum + `struct dplane_nht_info` + accessor declarations; constructor signature takes 5 independent fields (§2).
+- `zebra/zebra_dplane.c` — `dplane_nht_event_update()` constructor (5-field signature, `skip_kernel`, `dplane_update_enqueue`) + ctx handling + `dplane_op2str()` + switch-enum cases (§2, §4).
+- `zebra/zebra_rnh.c` — (1) add out parameter `route_entry_queued` to `zebra_rnh_resolve_nexthop_entry()`; (2) extend `zebra_rnh_eval_nexthop_entry()` signature and insert the trigger (`state_changed && !route_entry_queued`), passing 5 independent fields extracted from rnh; (3) `zebra_rnh_clear_nhc_flag()` passes NULL for the new argument (§4).
+- `zebra/zebra_nhg.c` — add `zebra_nhg_flag_reinstall_fpm()` helper (§4A).
+- `zebra/zebra_nhg.h` — declare `zebra_nhg_flag_reinstall_fpm()`.
+- `zebra/interface.c` — in `if_down_nhg_dependents()`, after `zebra_nhg_check_valid()` marks the singleton invalid, call `zebra_nhg_flag_reinstall_fpm()` on each composite in the singleton's dependents tree (§4A).
 
 ---
 
