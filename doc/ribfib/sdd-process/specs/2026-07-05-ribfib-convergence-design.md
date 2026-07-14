@@ -27,7 +27,6 @@ Goal: on top of the RIB/FIB layered architecture (Phase 1 already landed), imple
 > **User**: "Apart from the ribfib HLD, you are not allowed to read any code content outside (this working branch)."
 - **Repo scope**: `sonic-buildimage/` (contains the `sonic-frr` and `sonic-swss` submodules; `sonic-fib` has been merged into `src/libraries/`).
 - **Process constraint**: the user explicitly required running brainstorming before propose.
-> **User**: "Shouldn't we start with brainstorming first?"
 
 ---
 
@@ -74,7 +73,6 @@ This section records, for each key decision, the **conclusion + alternatives con
 ### 4.1 NHT trigger point
 
 - **Conclusion**: emit the NHT event from `zebra_rnh_eval_nexthop_entry()`.
-> **User**: "zebra_rnh_eval_nexthop_entry() — we should add it inside this function, right?"
 - Rationale: this is the core decision point for NHT state changes; `copy_state()` provides prev/curr, and `state_changed` already exists.
 
 ### 4.2 The `route_entry_queued` out-parameter (disambiguating `re==NULL`) — **flipped by grilling**
@@ -93,16 +91,14 @@ This section records, for each key decision, the **conclusion + alternatives con
 - **v2, a boolean affectedSet is insufficient**: when forward-walking an affected non-leaf, it still collected paths from an "already fully dead" subtree.
 > **AI**: "affectedSet is just a boolean flag (changed / unchanged); it can't distinguish 'fully disabled' from 'partially affected'."
 - **v3, per-node enable/disable**: each modified node stores `{fully_disabled, enable_group{dep→bool}}`; the forward walk skips disabled deps.
-> **User**: "Adopt the per-node enable/disable scheme."
 - **v4, gateway match must be checked at every node**: checking the gateway match only at the start node misjudges mid-walk nodes.
 > **User**: "The gateway match must be checked at every dependent node, not only at the start."
 - **v5, start-node semantics**: the start is merely the walk entry; only mark `fully_disabled` when its own `gateway == failedNh`, otherwise do not add it to modifiedSet.
-> **AI**: "Don't blindly mark it fully_disabled."
 
 ### 4.4 Two reverse indices (PIC Core vs PIC Edge)
 
 - The draft conflated PIC Core / PIC Edge onto a single table.
-> **User**: "I earlier used the 5.2 m_nexthop_to_global_RIBNHG directly for PicEdge, merging the two data sources into one table — that was my mix-up."
+> **User**: "I earlier used the 5.2 m_nexthop_to_global_RIBNHG directly for PicEdge, merging the two data sources into one table."
 - **Conclusion**: two independent `map<string, set<RIBNHGEntry*>>` — `m_nexthop_to_global_RIBNHG` (PIC Core) and `m_nexthop_to_vrf_RIBNHG` (PIC Edge). They are non-overlapping by construction.
 - **Rejected alternative**: a third `m_nexthop_to_sonic_NHG` table.
 > **User**: "From nexthop to rib id we already find the zebra id, and from the zebra id we can find the sonic id... is it still necessary to maintain m_nexthop_to_sonic_NHG?" → **not needed** (each RIBNHGEntry already carries its SONiC NHG ID).
