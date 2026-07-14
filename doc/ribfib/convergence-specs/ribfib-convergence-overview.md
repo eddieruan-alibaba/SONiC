@@ -85,7 +85,19 @@ Three-layer test strategy: fpmsyncd UT for algorithm branches / boundaries / mes
 
 ---
 
-## 4. Notes on the AI-Native SDD Process
+## 4. The AI-Native development loop
+
+This feature was not written by hand. Working from the agreed spec, an AI agent generated the code, deployed it to the test bed, ran the tests, analyzed the resulting logs, and proposed corrections — repeating this **generate → run → test → analyze → fix** cycle over several rounds until the tests passed. A developer stayed in the loop at the key decision points: reviewing results and deciding the direction whenever a fix involved a real design choice (for example, changing the local-link-down handling).
+
+A deliberate choice about what gets recorded where:
+
+- **The spec always holds the current correct design, updated in place each round — not the correction history.** Every iteration overwrites the spec with the design that is correct at that point: when a round of testing showed a design was wrong, we edited the spec directly (rather than appending a "we tried X then Y" changelog) and regenerated the code. The AI that consumes the spec wants the current correct answer, not a diary of what was tried and discarded; keeping that history in the spec would only add noise.
+- **The iteration is still traceable**, by combining three sources: the **git commit history** (the code, fix by fix), the **decision-evolution and grill-me records** in the design specs (the design-level reversals, distilled), and the **raw session transcript** (the blow-by-blow, including on-device log analysis).
+- **The concrete "problems encountered" during the loop are recorded in the per-component LLDs, for people to read** (e.g. the sonic-frr LLD's "Bring-up notes" appendix). Such war stories help a human learn and avoid the same pitfalls, but they are noise to the AI — so they live in the human-facing LLD, not the AI-facing spec.
+
+---
+
+## 5. Notes on the AI-Native SDD Process
 
 This design was produced AI-Native via Spec-Driven Development (SDD): an AI agent generated the code from specs rather than a human writing it line by line. A few things to keep in mind, and how this differs from hand coding:
 
