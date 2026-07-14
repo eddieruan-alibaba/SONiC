@@ -1,8 +1,11 @@
-# RIB/FIB Convergence Project Design
+# RIB/FIB Convergence Overview
 
-This document is the consolidated design overview for the `ribfib-convergence` project. Goal: on top of the SONiC RIB/FIB layered architecture (Phase 1), implement an NHT-event-driven fpmsyncd backwalk fast-fixup mechanism to shorten route convergence time when a nexthop fails, covering both PIC core and PIC edge.
+- **Feature**: ribfib-convergence
+- **Corresponding HLD**: [`../ribfib.md`](../ribfib.md) (Phase 2 – Route Convergence Handling)
 
-**Repositories involved** (all working on branch `ribfib_2_yuqing`):
+This document is the overview for the `ribfib-convergence` project. Goal: on top of the SONiC RIB/FIB layered architecture (Phase 1), implement an NHT-event-driven fpmsyncd backwalk fast-fixup mechanism to shorten route convergence time when a nexthop fails, covering both PIC core and PIC edge. It only summarizes what each module is responsible for; per-module implementation detail lives in the linked sub-specs.
+
+**Repositories involved:**
 - `sonic-frr` — Zebra RNH/dplane NHT event generation
 - `sonic-buildimage`
   - `src/sonic-frr/dplane_fpm_sonic/` — SONiC-specific FPM provider (message assembly / encoding)
@@ -10,158 +13,71 @@ This document is the consolidated design overview for the `ribfib-convergence` p
 - `sonic-swss/fpmsyncd` — the NHGMgr backwalk core
 - `sonic-mgmt/tests/srv6/` — system-level convergence tests
 
-**Phase 1 prerequisites (already in place):**
-- FRR: `zebra_dplane_ctx` carries depends/dependents; `NEXTHOP_GROUP_RECEIVED` flag; `--nhg-fib` knob
-- sonic-fib: `libnexthopgroup` library + `NextHopGroupFull` JSON schema
-- fpmsyncd: `NHGMgr` class with RIB NHG table (`RIBNHGTable`) / SONiC PIC content table (`SonicPICContentTable`) / SONiC NHG ID map; PIC context / gateway NHG; SRv6 VPN path; APP_STATE_DB
+**Prerequisites** — Phase 1 (RIB/FIB base infrastructure) has already landed across all repositories:
+- `sonic-frr`: `zebra_dplane_ctx` carries depends/dependents; `NEXTHOP_GROUP_RECEIVED` flag; `--nhg-fib` global knob
+- `sonic-fib` (`sonic-buildimage/src/libraries/sonic-fib`): `libnexthopgroup` encode/decode library + JSON schema
+- `sonic-swss/fpmsyncd`: `nhgmgr` class with SONiC zebra NHG table (`RIBNHGTable`) / SONiC PIC content table / SONiC NHG ID map; PIC context / gateway NHG; SRv6 VPN path; APP_STATE_DB
 
 ---
 
-## NHT event generation (FRR side)
+## 1. Key Design Decisions
 
-**Detailed spec:** [`ribfib-convergence-frr.md`](ribfib-convergence-frr.md)
-
-### Architecture decisions
-- When a Zebra RNH state change settles (and candidate route entries have left the QUEUED transient), send an NHT event to the dplane.
-- dplane adds `DPLANE_OP_NHT_EVENT_UPDATE`; the SONiC-specific FPM provider serializes it as `RTM_NEWNHTEVENT` (type 6000).
-- Preserve NHG ID needs no special handling — Zebra's own hash mechanism guarantees determinism.
-
-### Trigger point
-- **Function:** `sonic-frr/zebra/zebra_rnh.c::zebra_rnh_eval_nexthop_entry()`
-- **Prerequisite change:** `zebra_rnh_resolve_nexthop_entry()` gains an out parameter `route_entry_queued` to disambiguate the two causes of `re == NULL` (truly unreachable vs candidate skipped due to QUEUED).
-- **Trigger condition:** `state_changed && !route_entry_queued`
-
-### NHT message format (on the FPM wire)
-```
-nlmsghdr: type = RTM_NEWNHTEVENT (6000)
-struct rtmsg: rtm_family = address family of rnh_prefix
-NLA FPM_NHA_JSON_STR: JSON, 5 fields
-```
-JSON fields: `rnh_prefix`, `prev_resolved_prefix`, `prev_resolved_nhg_id`, `curr_resolved_prefix`, `curr_resolved_nhg_id`.
+| # | Decision | Conclusion |
+|---|----------|------------|
+| 1 | Scope | Full set: FRR NHT→dplane + fpmsyncd backwalk + PIC core/edge |
+| 2 | Backwalk granularity | Core + Edge; supports Global table / SRv6 VPN / VXLAN EVPN |
+| 3 | Fast-fixup policy | If any valid paths remain → rewrite APPDB; if all fail → skip APPDB write but continue walking |
+| 4 | NHT message carrier | FPM adds `RTM_NEWNHTEVENT` (6000); dplane adds `DPLANE_OP_NHT_EVENT_UPDATE` |
+| 5 | Two trigger paths | Recursive nexthop (has RNH) → emit NHT event; directly-connected ECMP member on link down (no RNH) → re-send via `NEXTHOP_GROUP_REINSTALL_FPM_ONLY`, not an NHT event |
+| 6 | Preserve NHG ID | No special handling. Zebra's built-in mechanism is sufficient |
+| 7 | Prune policy | Generic rule on `walk_result` + `depends.size()`; "stop at gateway NHG" is a surface behavior, no `isGatewayNhg()` type check |
+| 8 | Forward walk | Embedded in each backwalk step; recurses along enabled `depends` down to leaves |
+| 9 | Implementation structure | Everything integrated into the `NhgMgr` class; no new files |
+| 10 | CLI | Not in this cycle |
 
 ---
 
-## NhtEvent encode/decode (sonic-fib)
+## 2. Module responsibilities
 
-**Detailed spec:** [`ribfib-convergence-sonic-fib.md`](ribfib-convergence-sonic-fib.md)
+Each module below is described at a responsibility level only. Follow the link for the detailed design, data structures, and pseudo-code.
 
-### Architecture decisions
-- `NhtEvent` is **fully independent** from `NextHopGroupFull`: new schema, new C-API, new templates, mirrored file layout, namespace `fib`.
-- **Do not modify** existing functions in `render_schema.py` — support NhtEvent via a new helper + a new `main()` branch.
+### 2.1 sonic-frr — NHT event generation
 
-### Key deliverables
-- Schema: `src/libraries/sonic-fib/schema/NhtEvent.json`
-- Generated C++ class: `fib::NhtEvent` (encode/decode)
-- C-API: `nhtevent_capi.cpp/.h` (used by FRR encode)
-- Templates: `nhtevent.h.j2` / `nhtevent_json.h.j2` / `c_nhtevent.h.j2`
+Detects a nexthop failure through two trigger points and drives fpmsyncd fast-fixup:
 
----
+- **Trigger A (recursive nexthop):** when a Zebra RNH resolution settles (nexthop unreachable or resolution moved), emit a new `DPLANE_OP_NHT_EVENT_UPDATE` down the dplane, carrying the prev/curr resolved prefix + NHG id on the ctx and disambiguating the transient QUEUED case so events fire only on a settled state.
+- **Trigger B (directly-connected ECMP member):** such members carry no RNH, so on interface down the affected NHG closure is flagged for FPM-only reinstall (`NEXTHOP_GROUP_REINSTALL_FPM_ONLY`) and re-sent through the existing NHG path — no new event type.
 
-## FPM message encoding (dplane_fpm_sonic.c)
+→ [`ribfib-convergence-frr.md`](ribfib-convergence-frr.md)
 
-**Detailed spec:** [`ribfib-convergence-dplane-encoding.md`](ribfib-convergence-dplane-encoding.md)
+### 2.2 sonic-fib — NhtEvent encode/decode
 
-### Architecture decisions
-- The SONiC-specific FPM provider `src/sonic-frr/dplane_fpm_sonic/dplane_fpm_sonic.c` (which replaces stock `dplane_fpm_nl.c` at runtime) assembles the `RTM_NEWNHTEVENT` message.
-- It adds the `RTM_NEWNHTEVENT = 6000` enum value and a `DPLANE_OP_NHT_EVENT_UPDATE` op-dispatch handler that calls `nht_event_encode()` and puts the JSON into `FPM_NHA_JSON_STR`.
+Provides the `NhtEvent` JSON schema plus the generated C++ class and C-API used to encode (FRR side) and decode (fpmsyncd side) the event. Fully independent from `NextHopGroupFull`; `render_schema.py` is extended without touching existing code paths.
 
----
+→ [`ribfib-convergence-sonic-fib.md`](ribfib-convergence-sonic-fib.md)
 
-## Backwalk core algorithm (fpmsyncd)
+### 2.3 dplane-encoding — FPM provider message assembly
 
-**Detailed spec:** [`ribfib-convergence-swss.md`](ribfib-convergence-swss.md)
+The SONiC-specific FPM provider serializes a `DPLANE_OP_NHT_EVENT_UPDATE` ctx into the `RTM_NEWNHTEVENT` (6000) netlink message, placing the encoded JSON into the `FPM_NHA_JSON_STR` NLA.
 
-### Architecture decisions
-- **All methods integrated into the `NHGMgr` class**; no new source files.
-- Backwalk is **pure computation + APPDB write only**: it never mutates the in-memory NHG; the in-memory NHG is refreshed by the subsequent normal FRR NHG update.
-- Supports Global table / SRv6 VPN / VXLAN EVPN.
+→ [`ribfib-convergence-dplane-encoding.md`](ribfib-convergence-dplane-encoding.md)
 
-### Two reverse indices (key Grill-Me decision)
-- `m_nexthop_to_global_RIBNHG : map<string, set<RIBNHGEntry*>>` — Global view, used by PIC core
-- `m_nexthop_to_vrf_RIBNHG : map<string, set<RIBNHGEntry*>>` — VRF/VPN view, used by PIC edge
-- Identical shape, partitioned by RIB NHG scope, non-overlapping by construction
-- The value stores `RIBNHGEntry*` (not a RIB NHG ID, not a SONiC NHG ID): warm reboot makes Zebra reassign NHG IDs, which would invalidate an ID-keyed index wholesale; entry pointers stay consistent because the reboot-time del/add re-populates the index through unindex/index.
-- Maintenance points: **add/del only, never update** (Zebra semantics: a nexthop change goes through delete-then-re-add); `delNHGFull` calls `unindexNexthopToRIBNHG` before `delEntry`, so there is no dangling pointer.
+### 2.4 sonic-swss (fpmsyncd) — NHGMgr backwalk
 
-### Direct-nexthop match (key Grill-Me decision)
-- Test: `RIBNHGEntry::m_nexthop` (comma-separated) contains `failedNh`
-- Implementation: `isDirectNexthop(entry, failedNh)` = `entry ∈ m_nexthop_to_global_RIBNHG[failedNh]`
+Consumes the NHT event and runs the backwalk fast-fixup: PIC core (starting from the previously resolved NHG) and PIC edge (starting from VRF/VPN NHGs that reference the failed nexthop), driven by two reverse indices. Recomputes remaining valid paths and rewrites only APPDB; the in-memory NHG is left to the subsequent normal FRR NHG update.
 
-### Generic prune rule (key Grill-Me decision)
-No `isGatewayNhg()` type check. Based on `walk_result` + `depends.size()`:
+→ [`ribfib-convergence-swss.md`](ribfib-convergence-swss.md)
 
-| walk_result | depends.size() | Decision |
-|---|---|---|
-| true | any | do not prune |
-| false | ≥ 2 (multi-path) | do not prune (defensive) |
-| false | 1 (single-path) | prune |
+### 2.5 Test — UT + topotest + sonic-mgmt
 
-The HLD's "stop at gateway NHG" is a surface behavior of this generic rule.
+Three-layer test strategy: fpmsyncd UT for algorithm branches / boundaries / message parsing, FRR topotest for NHT trigger conditions and FPM message format, and sonic-mgmt E2E for end-to-end convergence timing and route-flap absence.
 
-### PIC core / PIC edge share one framework
-Both backwalks use the same `fib_nhg_back_walk()` doBackwalk logic; they differ only in **where the start-point set comes from**:
-- PIC core: `prev_resolved_nhg_id` as the start
-- PIC edge: `m_nexthop_to_vrf_RIBNHG[failedNh]` as the start set
-
-### Forward walk cycle safety net
-`resolveLeafPaths` / `collectAllLeafPaths` pass a top-level `visited set<ribID>`; on `nhgId ∈ visited` → log ERROR + return `[]`. **No fixed depth ceiling** (`MAX_NHG_RECURSION` is FRR serialization capacity, unrelated to runtime).
-
-### Fast-fixup policy
-| Situation | APPDB action | in-memory NHG | Walk continues |
-|---|---|---|---|
-| Valid paths remain | rewrite (remaining paths) | unchanged | yes |
-| All fail | skip write | unchanged | yes (propagate fully_disabled upward) |
-| Single-path miss | skip write | unchanged | no (prune) |
+→ [`ribfib-convergence-test.md`](ribfib-convergence-test.md)
 
 ---
 
-## Error handling and boundaries (cross-repo)
+## 3. Compatibility
 
-| Scenario | Handling |
-|---|---|
-| FPM NLA missing / JSON decode failure | log warning, drop |
-| PIC core start lookup failure | log warning, skip PIC core, **PIC edge still runs** |
-| dependent lookup failure | log warning, skip that dependent |
-| Forward walk revisit (cycle guard) | log ERROR, truncate and return `[]` |
-| Diamond-dependency backwalk revisit | modifiedSet overwrite + re-propagate upward (**allowed**) |
-| APPDB write failure | log error; no retry, no rollback |
-| PIC edge empty lookup | silent return (normal case) |
-| PIC core start is composite with no dependents | log DEBUG, PIC core no-op |
-| curr_resolved_nhg_id != 0 | rejected at routesync dispatch layer; Phase 1 does not process |
-
----
-
-## Testing
-
-**Detailed spec:** [`ribfib-convergence-test.md`](ribfib-convergence-test.md)
-
-All tests are consolidated in the test sub-spec. Three-layer split:
-
-| Layer | Location | Covers |
-|---|---|---|
-| UT | `sonic-swss/tests/mock_tests/` | algorithm branches, boundaries, message parsing, error handling, index maintenance (≥80% line coverage) |
-| topotest | `sonic-frr/tests/topotests/` | NHT trigger conditions, dplane ctx, FPM message format, QUEUED-transient suppression |
-| system | `sonic-mgmt/tests/srv6/` | end-to-end timing (NHG before ROUTE), real SRv6 VPN gateway prune, no route flap |
-
-**Key new helper** (`sonic-mgmt/tests/srv6/srv6_utils.py`): `verify_nhg_before_routes()` — parses `swss.rec` and asserts the NHG_TABLE SET timestamp precedes the ROUTE_TABLE SET timestamp.
-
-**Baseline:** the 4 existing cases are kept as a regression baseline; this cycle adds 3 new cases (SRv6 gateway prune / topology1 timing / no route flap).
-
----
-
-## Sub-spec navigation
-
-- **Master design (consolidated):** [`ribfib-convergence-design.md`](ribfib-convergence-design.md)
-- **sonic-frr — FRR-side NHT event generation:** [`ribfib-convergence-frr.md`](ribfib-convergence-frr.md)
-- **sonic-fib — NhtEvent encode/decode library:** [`ribfib-convergence-sonic-fib.md`](ribfib-convergence-sonic-fib.md)
-- **dplane-encoding — FPM provider message assembly:** [`ribfib-convergence-dplane-encoding.md`](ribfib-convergence-dplane-encoding.md)
-- **sonic-swss — NHGMgr backwalk:** [`ribfib-convergence-swss.md`](ribfib-convergence-swss.md)
-- **Test — UT + topotest + sonic-mgmt (all tests):** [`ribfib-convergence-test.md`](ribfib-convergence-test.md)
-
-## Change log
-
-| Date | Feature | Change |
-|------|---------|--------|
-| 2026-07-05 | ribfib-convergence | Initial version: FRR NHT→dplane, sonic-fib NhtEvent encode/decode, fpmsyncd NHGMgr backwalk (PIC core + PIC edge), three-layer test strategy |
-| 2026-07-06 | ribfib-convergence | Post-Grill-Me refactor: two reverse indices `m_nexthop_to_global_RIBNHG` + `m_nexthop_to_vrf_RIBNHG`; precise direct-nexthop match; removed isGatewayNhg, prune → generic rule; forward walk uses visited set; `re == NULL` disambiguated via `route_entry_queued` out param. Split into per-repo sub-specs |
-| 2026-07-10 | ribfib-convergence | Reverse index value changed from RIB NHG ID to `RIBNHGEntry*` (warm reboot reassigns NHG IDs). Specs consolidated to English only; sub-specs reorganized into FRR / sonic-fib / dplane-encoding / swss + one dedicated test sub-spec |
+- `RTM_NEWNHTEVENT` (6000) is a new FPM message type; older fpmsyncd instances silently ignore unknown types.
+- The `NextHopGroupFull` code path is untouched.
+- When the `--nhg-fib` knob is disabled, FRR does not emit NHT events (reusing the existing knob semantics).

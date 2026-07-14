@@ -1,14 +1,9 @@
-# RIB/FIB Convergence — sonic-swss sub-spec
+# RIB/FIB Convergence — sonic-swss
 
 - **Repository**: `sonic-swss` (`fpmsyncd/`)
-- **Branch**: `ribfib_2_yuqing`
-- **Project design**: [`ribfib-convergence-overview.md`](ribfib-convergence-overview.md)
-- **Master spec**: [`ribfib-convergence-design.md`](ribfib-convergence-design.md)
+- **Overview**: [`ribfib-convergence-overview.md`](ribfib-convergence-overview.md)
 - **Depends on**: [`ribfib-convergence-sonic-fib.md`](ribfib-convergence-sonic-fib.md) (`fib::NhtEvent` decode)
 - **Tests**: [`ribfib-convergence-test.md`](ribfib-convergence-test.md)
-- **Status**: designing
-- **Author**: Yuqing Zhao
-- **Date**: 2026-07-05
 
 ---
 
@@ -58,9 +53,9 @@ void RouteSync::onNhtEventMsg(struct nlmsghdr *h, int len) {
 
 ---
 
-## 3. New methods on the NHGMgr class (no new files)
+## 3. New methods on the NHGMgr class
 
-Add to `class NHGMgr` in `fpmsyncd/nhgmgr.h` (**note: the class name is `NHGMgr`, all caps**):
+Add to `class NHGMgr` in `fpmsyncd/nhgmgr.h`:
 
 ```cpp
 class NHGMgr {
@@ -179,7 +174,7 @@ onNhtEvent(event):
 
 ---
 
-## 6. `backwalkPicCore()` logic (final version)
+## 6. `backwalkPicCore()` logic
 
 ### 6.1 Direct-nexthop match definition
 
@@ -420,3 +415,13 @@ collectAllLeafPaths(nhgId, visited):
 ## 13. Testing
 
 fpmsyncd UT (algorithm branch coverage, index maintenance, message parsing, error handling) is described in the consolidated test sub-spec: [`ribfib-convergence-test.md`](ribfib-convergence-test.md) §fpmsyncd UT.
+
+---
+
+## Appendix A. Implementation notes
+
+Small gotchas kept out of the design body so it reads cleanly.
+
+- **Class name casing:** the class is `NHGMgr` (all caps), not `NhgMgr` — an easy source of compile typos when adding the new methods.
+- **`RTM_NEWNHTEVENT` value lives in two repos:** the constant `6000` is defined both here (fpmsyncd) and in `dplane_fpm_sonic.c` (sonic-buildimage). The two must stay in sync; a mismatch silently drops the event at dispatch. Prefer a shared header if one becomes available from sonic-fib.
+- **Use-after-free invariant (see §4.3):** every code path that removes a RIB NHG must call `unindexNexthopToRIBNHG(entry)` **before** `delEntry()`. Reversing the order leaves a dangling `RIBNHGEntry*` in the reverse index, and the next backwalk that dereferences it crashes.

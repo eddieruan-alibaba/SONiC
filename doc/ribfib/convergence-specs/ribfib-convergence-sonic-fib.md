@@ -1,14 +1,9 @@
-# RIB/FIB Convergence — sonic-fib sub-spec
+# RIB/FIB Convergence — sonic-fib
 
 - **Repository**: `sonic-buildimage` (`src/libraries/sonic-fib/`)
-- **Branch**: `ribfib_2_yuqing`
-- **Project design**: [`ribfib-convergence-overview.md`](ribfib-convergence-overview.md)
-- **Master spec**: [`ribfib-convergence-design.md`](ribfib-convergence-design.md)
+- **Overview**: [`ribfib-convergence-overview.md`](ribfib-convergence-overview.md)
 - **Related**: [`ribfib-convergence-dplane-encoding.md`](ribfib-convergence-dplane-encoding.md) (the FPM provider that consumes this library)
 - **Tests**: [`ribfib-convergence-test.md`](ribfib-convergence-test.md)
-- **Status**: designing
-- **Author**: Yuqing Zhao
-- **Date**: 2026-07-05
 
 ---
 

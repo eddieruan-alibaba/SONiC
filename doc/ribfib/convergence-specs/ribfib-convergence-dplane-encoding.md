@@ -1,14 +1,9 @@
-# RIB/FIB Convergence — dplane FPM encoding sub-spec
+# RIB/FIB Convergence — dplane FPM encoding
 
 - **Repository**: `sonic-buildimage` (`src/sonic-frr/dplane_fpm_sonic/`)
-- **Branch**: `ribfib_2_yuqing`
-- **Project design**: [`ribfib-convergence-overview.md`](ribfib-convergence-overview.md)
-- **Master spec**: [`ribfib-convergence-design.md`](ribfib-convergence-design.md)
+- **Overview**: [`ribfib-convergence-overview.md`](ribfib-convergence-overview.md)
 - **Depends on**: [`ribfib-convergence-frr.md`](ribfib-convergence-frr.md) (dplane op + accessors), [`ribfib-convergence-sonic-fib.md`](ribfib-convergence-sonic-fib.md) (`nht_event_encode()`)
 - **Tests**: [`ribfib-convergence-test.md`](ribfib-convergence-test.md)
-- **Status**: designing
-- **Author**: Yuqing Zhao
-- **Date**: 2026-07-05
 
 ---
 
@@ -78,16 +73,16 @@ case DPLANE_OP_NHT_EVENT_UPDATE:
     req->n.nlmsg_type  = RTM_NEWNHTEVENT;
     req->n.nlmsg_pid   = nl->snl.nl_pid;
 
-    const struct prefix *rnh_p = dplane_ctx_get_nht_rnh_prefix(ctx);
+    const struct prefix *rnh_p = dplane_ctx_get_rnh_prefix(ctx);
     req->r.rtm_family = rnh_p->family;
 
     /* call sonic-fib C-API to build the JSON */
     char *json_str = nht_event_encode(
         rnh_p,
-        dplane_ctx_get_nht_prev_resolved_prefix(ctx),
-        dplane_ctx_get_nht_prev_resolved_nhg_id(ctx),
-        dplane_ctx_get_nht_curr_resolved_prefix(ctx),
-        dplane_ctx_get_nht_curr_resolved_nhg_id(ctx));
+        dplane_ctx_get_rnh_prev_resolved_prefix(ctx),
+        dplane_ctx_get_rnh_prev_resolved_nhg_id(ctx),
+        dplane_ctx_get_rnh_curr_resolved_prefix(ctx),
+        dplane_ctx_get_rnh_curr_resolved_nhg_id(ctx));
     if (!json_str) {
         zlog_err("%s: Failed to encode NhtEvent JSON", __func__);
         return -1;
@@ -108,7 +103,7 @@ To materialize `struct C_NhtEvent` (if needed) the provider includes `src/c_nhte
 
 ## 5. Error handling and boundaries
 
-- `dplane_ctx_get_nht_*()` returns NULL → log error, drop the message.
+- `dplane_ctx_get_rnh_*()` returns NULL → log error, drop the message.
 - `nht_event_encode()` returns NULL (allocation failure or invalid arg) → log error, drop the message.
 - NLA put failure → free `json_str`, return error.
 

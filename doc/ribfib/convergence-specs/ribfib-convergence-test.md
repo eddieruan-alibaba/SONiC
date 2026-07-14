@@ -1,13 +1,8 @@
-# RIB/FIB Convergence — Test sub-spec
+# RIB/FIB Convergence — Test
 
 - **Repositories**: `sonic-swss` (UT), `sonic-frr` (topotest), `sonic-mgmt` (E2E)
-- **Branch**: `ribfib_2_yuqing`
-- **Project design**: [`ribfib-convergence-overview.md`](ribfib-convergence-overview.md)
-- **Master spec**: [`ribfib-convergence-design.md`](ribfib-convergence-design.md)
+- **Overview**: [`ribfib-convergence-overview.md`](ribfib-convergence-overview.md)
 - **Feature sub-specs**: [FRR](ribfib-convergence-frr.md) · [sonic-fib](ribfib-convergence-sonic-fib.md) · [dplane-encoding](ribfib-convergence-dplane-encoding.md) · [swss](ribfib-convergence-swss.md)
-- **Status**: designing
-- **Author**: Yuqing Zhao
-- **Date**: 2026-07-05
 
 ---
 
@@ -61,7 +56,7 @@ Predefined topology JSON + injected event → verify APPDB changes.
 
 ## 4. sonic-frr topotest — FRR NHT dplane events
 
-**Location:** `sonic-frr/tests/topotests/zebra_nht_event/` (extending the RIB/FIB topotest infrastructure already on `ribfib_2_yuqing`). Artifacts: `test_nht_event.py`, `r1/frr.conf`, `r2/frr.conf`, `__init__.py`.
+**Location:** `sonic-frr/tests/topotests/zebra_nht_event/` (extending the existing RIB/FIB topotest infrastructure). Artifacts: `test_nht_event.py`, `r1/frr.conf`, `r2/frr.conf`, `__init__.py`.
 
 **Capture method:** a log-based check (grep for the `NHT_EVENT_UPDATE:` `zlog_info` trace), and/or a mock FPM listener (a Python socket on the FPM port parsing the netlink header + JSON payload).
 
@@ -82,7 +77,7 @@ Predefined topology JSON + injected event → verify APPDB changes.
 
 ## 5. sonic-mgmt system tests — end to end
 
-**Location:** `sonic-mgmt/tests/srv6/` on branch `ribfib_2_yuqing`. Reuse the existing framework (`srv6_utils.py` helpers + the pattern in `test_srv6_basic_sanity.py`).
+**Location:** `sonic-mgmt/tests/srv6/`. Reuse the existing framework (`srv6_utils.py` helpers + the pattern in `test_srv6_basic_sanity.py`).
 
 ### 5.1 Baseline (kept untouched, used as regression baseline)
 
