@@ -82,3 +82,18 @@ Three-layer test strategy: fpmsyncd UT for algorithm branches / boundaries / mes
 - `RTM_NEWNHTEVENT` (6000) is a new FPM message type; older fpmsyncd instances silently ignore unknown types.
 - The `NextHopGroupFull` code path is untouched.
 - When the `--nhg-fib` knob is disabled, FRR does not emit NHT events (reusing the existing knob semantics).
+
+---
+
+## 4. Notes on the AI-Native SDD Process
+
+This design was produced AI-Native via Spec-Driven Development (SDD): an AI agent generated the code from specs rather than a human writing it line by line. A few things to keep in mind, and how this differs from hand coding:
+
+- **The spec is the source of truth.** Change the spec first, then regenerate or adjust the code; hand-editing code while leaving the spec stale makes the next regeneration diverge.
+- **Rationale lives in the process artifacts, not inline comments.** Intent and decision evolution are recorded under `sdd-process/`; the code is kept comment-light, so consult the specs for the "why".
+- **"Compiles" does not mean "correct".** Generated code can be plausible but wrong — verify by running and observing behavior, and never trust an "it's done" claim without evidence.
+- **The AI needs explicit guardrails** that a human would self-regulate: scope isolation, do-not-touch boundaries, and alignment with existing naming and conventions.
+- **The design must be actively pressure-tested.** An AI does not self-doubt, so decisions are hardened by adversarial review rather than left to intuition.
+- **Reviewing AI output has a different focus** from reviewing a human's: check that it matches the spec, uses real (not invented) APIs, and follows existing conventions — rather than assuming those and only questioning the design.
+
+For the full process trace, see [`../sdd-process/`](../sdd-process/).
