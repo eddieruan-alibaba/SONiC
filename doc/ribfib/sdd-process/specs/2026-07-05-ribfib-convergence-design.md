@@ -1,4 +1,5 @@
 # RIB/FIB Convergence Phase 2 — Design Spec (SDD Process Artifact)
+> **AI-facing SDD artifact** — This document is written to be consumed by an AI agent to generate code. It is a Spec-Driven Development process artifact, not human-oriented documentation.
 
 > **What this is**: This document is the process artifact of the `ribfib-convergence` project across the SDD stages **brainstorming → design → grill-me**. It captures "how the intent was clarified, how approaches were weighed, how decisions evolved, and how the design was pressure-tested." It is AI-facing (for collaborative reconstruction). The clean, delivery-oriented **LLD lives in** [`../../convergence-specs/`](../../convergence-specs/) (6 documents); the two serve different purposes and complement each other.
 >

@@ -1,4 +1,5 @@
 # RIB/FIB Convergence — dplane FPM encoding
+> **Developer-facing summary (LLD)** — This document is a low-level design summarized for developers to read.
 
 - **Repository**: `sonic-buildimage` (`src/sonic-frr/dplane_fpm_sonic/`)
 - **Overview**: [`ribfib-convergence-overview.md`](ribfib-convergence-overview.md)

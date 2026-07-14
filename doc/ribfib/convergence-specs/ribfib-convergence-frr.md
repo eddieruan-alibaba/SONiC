@@ -1,4 +1,5 @@
 # RIB/FIB Convergence — sonic-frr
+> **Developer-facing summary (LLD)** — This document is a low-level design summarized for developers to read.
 
 - **Repository**: `sonic-frr`
 - **Overview**: [`ribfib-convergence-overview.md`](ribfib-convergence-overview.md)

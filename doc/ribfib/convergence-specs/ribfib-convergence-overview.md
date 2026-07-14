@@ -1,4 +1,5 @@
 # RIB/FIB Convergence Overview
+> **Developer-facing summary (LLD)** — This document is a low-level design summarized for developers to read.
 
 - **Feature**: ribfib-convergence
 - **Corresponding HLD**: [`../ribfib.md`](../ribfib.md) (Phase 2 – Route Convergence Handling)

@@ -1,4 +1,5 @@
 # RIB/FIB Convergence — Test
+> **Developer-facing summary (LLD)** — This document is a low-level design summarized for developers to read.
 
 - **Repositories**: `sonic-swss` (UT), `sonic-frr` (topotest), `sonic-mgmt` (E2E)
 - **Overview**: [`ribfib-convergence-overview.md`](ribfib-convergence-overview.md)

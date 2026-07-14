@@ -1,4 +1,5 @@
 # RIB/FIB Convergence — Plan B: sonic-frr
+> **AI-facing SDD artifact** — This document is written to be consumed by an AI agent to generate code. It is a Spec-Driven Development process artifact, not human-oriented documentation.
 
 > **For agentic workers:** Use /alinos.subagent-dev (recommended) or /alinos.executing-plans to implement this plan task-by-task.
 

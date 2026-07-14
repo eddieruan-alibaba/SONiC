@@ -1,4 +1,5 @@
 # Project Design: RIB/FIB Convergence
+> **AI-facing SDD artifact** — This document is written to be consumed by an AI agent to generate code. It is a Spec-Driven Development process artifact, not human-oriented documentation.
 
 A route-convergence acceleration project on top of the RIB/FIB layered architecture (Zebra = RIB, fpmsyncd = FIB). Phase 1 landed the layering infrastructure; Phase 2 (this project, `ribfib-convergence`) implements an **NHT-event-driven fpmsyncd backwalk fast-fixup** so that when a nexthop fails, route-convergence time is minimized — covering PIC core, PIC edge, and the directly-connected local-link-down case.
 
