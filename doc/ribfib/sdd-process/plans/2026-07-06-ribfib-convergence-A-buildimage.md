@@ -8,7 +8,7 @@
 **Tech Stack:** C/C++, Python (Jinja2), autotools, netlink, libnl.
 
 **Dependencies:** None (this plan is a prerequisite for B and C).
-**Corresponding spec:** [`ribfib-convergence-sonic-fib.md`](../../convergence-specs/ribfib-convergence-sonic-fib.md) (NhtEvent encode/decode library) + [`ribfib-convergence-dplane-encoding.md`](../../convergence-specs/ribfib-convergence-dplane-encoding.md) (FPM message assembly)
+**Corresponding spec:** [`ribfib-convergence-sonic-fib.md`](../../convergence-lld/ribfib-convergence-sonic-fib.md) (NhtEvent encode/decode library) + [`ribfib-convergence-dplane-encoding.md`](../../convergence-lld/ribfib-convergence-dplane-encoding.md) (FPM message assembly)
 
 ---
 

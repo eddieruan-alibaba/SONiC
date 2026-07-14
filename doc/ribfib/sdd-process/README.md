@@ -8,7 +8,7 @@ how the work was broken into implementation plans.
 
 > The detailed artifacts below are written in Chinese (the working language of the
 > development session), preserving key verbatim exchanges. The clean, delivery-oriented
-> **LLD** (English) lives in the sibling folder [`../convergence-specs/`](../convergence-specs/).
+> **LLD** (English) lives in the sibling folder [`../convergence-lld/`](../convergence-lld/).
 
 ## The SDD flow
 
@@ -33,7 +33,7 @@ brainstorming ──▶ design ──▶ grill-me ──▶ writing-plans ──
 
 - **This folder (`sdd-process/`)** = the AI-facing *process* record (dialogue, decision
   evolution, pressure-testing).
-- **[`../convergence-specs/`](../convergence-specs/)** = the human-facing *LLD* delivered
+- **[`../convergence-lld/`](../convergence-lld/)** = the human-facing *LLD* delivered
   alongside the code (overview + frr + sonic-fib + dplane-encoding + swss + test).
 
 The two are complementary: the SDD process explains *why* the design looks the way it

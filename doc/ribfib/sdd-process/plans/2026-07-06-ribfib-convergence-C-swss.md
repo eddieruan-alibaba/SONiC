@@ -8,7 +8,7 @@
 **Tech Stack:** C++17 (`fpmsyncd`), Google Test (`tests/mock_tests`), libnl, Redis (APPDB).
 
 **Dependencies:** Plan A (the `NhtEvent` class of `libnexthopgroup` + `nhtevent_json.h`). **Plan B is not a required dependency** — UTs can be triggered with an injected mock NhtEvent; however, end-to-end system testing can only be verified after Plan B is completed.
-**Corresponding spec:** [`ribfib-convergence-swss.md`](../../convergence-specs/ribfib-convergence-swss.md)
+**Corresponding spec:** [`ribfib-convergence-swss.md`](../../convergence-lld/ribfib-convergence-swss.md)
 
 ---
 

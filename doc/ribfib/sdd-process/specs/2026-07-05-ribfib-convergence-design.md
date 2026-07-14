@@ -1,14 +1,14 @@
 # RIB/FIB Convergence Phase 2 — Design Spec (SDD Process Artifact)
 > **AI-facing SDD artifact** — This document is written to be consumed by an AI agent to generate code. It is a Spec-Driven Development process artifact, not human-oriented documentation.
 
-> **What this is**: This document is the process artifact of the `ribfib-convergence` project across the SDD stages **brainstorming → design → grill-me**. It captures "how the intent was clarified, how approaches were weighed, how decisions evolved, and how the design was pressure-tested." It is AI-facing (for collaborative reconstruction). The clean, delivery-oriented **LLD lives in** [`../../convergence-specs/`](../../convergence-specs/) (6 documents); the two serve different purposes and complement each other.
+> **What this is**: This document is the process artifact of the `ribfib-convergence` project across the SDD stages **brainstorming → design → grill-me**. It captures "how the intent was clarified, how approaches were weighed, how decisions evolved, and how the design was pressure-tested." It is AI-facing (for collaborative reconstruction). The clean, delivery-oriented **LLD lives in** [`../../convergence-lld/`](../../convergence-lld/) (6 documents); the two serve different purposes and complement each other.
 >
 > Source: the real human-AI dialogue of this project's SDD sessions (distilled, with key verbatim quotes preserved and translated).
 
 - **Feature**: ribfib-convergence (route-convergence acceleration on top of the RIB/FIB layered architecture)
 - **Corresponding HLD**: RIB/FIB HLD — Phase 2 Convergence
 - **Stages**: brainstorming (intent / requirements / approaches) → design (decision evolution) → grill-me (pressure-test)
-- **Delivered LLD**: [`../../convergence-specs/`](../../convergence-specs/) (overview + frr + sonic-fib + dplane-encoding + swss + test)
+- **Delivered LLD**: [`../../convergence-lld/`](../../convergence-lld/) (overview + frr + sonic-fib + dplane-encoding + swss + test)
 - **Implementation plans**: `../plans/2026-07-06-ribfib-convergence-{A,B,C}.md`
 
 ---
@@ -179,7 +179,7 @@ The design took shape **through being challenged**. The table below summarizes t
 
 ## 7. Related Artifacts
 
-- **Delivered LLD** (clean, code-repo/community-facing): [`../../convergence-specs/`](../../convergence-specs/)
+- **Delivered LLD** (clean, code-repo/community-facing): [`../../convergence-lld/`](../../convergence-lld/)
   - `ribfib-convergence-overview.md` / `-frr.md` / `-sonic-fib.md` / `-dplane-encoding.md` / `-swss.md` / `-test.md`
 - **Implementation plans**: `../plans/2026-07-06-ribfib-convergence-{A,B,C}.md`
 - **Consolidated design**: [`../ribfib-convergence_design.md`](../ribfib-convergence_design.md)

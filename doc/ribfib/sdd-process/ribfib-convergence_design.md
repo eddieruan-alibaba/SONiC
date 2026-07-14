@@ -6,7 +6,7 @@ A route-convergence acceleration project on top of the RIB/FIB layered architect
 > This document is the project-level **consolidated design** — the single source of truth that integrates the whole project's design in distilled form (per-component: role + key decisions + link to the detailed LLD).
 > - Process artifact (brainstorming/design/grill-me decision evolution): [`specs/2026-07-05-ribfib-convergence-design.md`](specs/2026-07-05-ribfib-convergence-design.md)
 > - Implementation plans: `plans/2026-07-06-ribfib-convergence-{A,B,C}.md`
-> - Delivered LLD (per-component detail): [`../convergence-specs/`](../convergence-specs/)
+> - Delivered LLD (per-component detail): [`../convergence-lld/`](../convergence-lld/)
 
 ## 1. End-to-end pipeline
 
@@ -54,7 +54,7 @@ Detects a nexthop failure and hands it to the dplane. Two triggers:
 
 Naming: dplane ctx sub-struct `struct dplane_rnh_info` (union member `u.rnh_info`); accessors `dplane_ctx_get_rnh_*`; constructor `dplane_nht_event_update(rnh_prefix, prev_resolved_prefix, prev_nhg_id, curr_resolved_prefix, curr_nhg_id)`; `struct rnh` gains a `resolved_nhg_id` field maintained by `copy_state()`.
 
-Detailed LLD: [`../convergence-specs/ribfib-convergence-frr.md`](../convergence-specs/ribfib-convergence-frr.md)
+Detailed LLD: [`../convergence-lld/ribfib-convergence-frr.md`](../convergence-lld/ribfib-convergence-frr.md)
 
 ## 3. Component: sonic-fib — NhtEvent encode/decode library
 
@@ -64,7 +64,7 @@ Provides the wire contract shared by FRR (encode) and fpmsyncd (decode):
 - Generated C++ class + C-API (`nht_event_encode()` / `NhtEvent::decode()`), with mirrored `nhtevent.*` templates.
 - `render_schema.py` is **extended** (new function + new `main()` branch); the existing `NextHopGroupFull` code path is left untouched to avoid regression. Fully independent from `NextHopGroupFull`.
 
-Detailed LLD: [`../convergence-specs/ribfib-convergence-sonic-fib.md`](../convergence-specs/ribfib-convergence-sonic-fib.md)
+Detailed LLD: [`../convergence-lld/ribfib-convergence-sonic-fib.md`](../convergence-lld/ribfib-convergence-sonic-fib.md)
 
 ## 4. Component: dplane-encoding — FPM provider message assembly
 
@@ -73,7 +73,7 @@ The SONiC-specific FPM provider (`dplane_fpm_sonic.c`, which replaces stock `dpl
 - Adds `RTM_NEWNHTEVENT` (6000) and a `DPLANE_OP_NHT_EVENT_UPDATE` dispatch handler.
 - Assembles `nlmsghdr` (type 6000) + `struct rtmsg` (family of the RNH prefix) + the `FPM_NHA_JSON_STR` NLA, reading ctx via the `dplane_ctx_get_rnh_*` accessors and calling `nht_event_encode()` for the JSON payload.
 
-Detailed LLD: [`../convergence-specs/ribfib-convergence-dplane-encoding.md`](../convergence-specs/ribfib-convergence-dplane-encoding.md)
+Detailed LLD: [`../convergence-lld/ribfib-convergence-dplane-encoding.md`](../convergence-lld/ribfib-convergence-dplane-encoding.md)
 
 ## 5. Component: sonic-swss / fpmsyncd — NHGMgr backwalk fast-fixup
 
@@ -89,7 +89,7 @@ Consumes the NHT event and runs the fast-fixup. **Implementation structure**: ev
 - **Prune**: generic rule on `walk_result` + `depends.size()`, no `isGatewayNhg()` type check.
 - **Known improvement (non-blocking)**: the indices currently store `RIBNHGEntry*` pointers; the HLD prefers IDs as more robust (warm-reboot reshuffles NHG IDs). Safe as long as lifecycle add/remove is paired.
 
-Detailed LLD: [`../convergence-specs/ribfib-convergence-swss.md`](../convergence-specs/ribfib-convergence-swss.md)
+Detailed LLD: [`../convergence-lld/ribfib-convergence-swss.md`](../convergence-lld/ribfib-convergence-swss.md)
 
 ## 6. Component: test
 
@@ -99,7 +99,7 @@ Three-layer strategy:
 - **topotest** (`sonic-frr/tests/topotests`): NHT trigger conditions, dplane ctx, FPM message format, QUEUED-transient suppression.
 - **sonic-mgmt** (`tests/srv6`): end-to-end convergence timing (NHG-before-ROUTE), real SRv6 VPN gateway prune, no route flap.
 
-Detailed LLD: [`../convergence-specs/ribfib-convergence-test.md`](../convergence-specs/ribfib-convergence-test.md)
+Detailed LLD: [`../convergence-lld/ribfib-convergence-test.md`](../convergence-lld/ribfib-convergence-test.md)
 
 ## 7. Cross-cutting decision summary
 

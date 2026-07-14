@@ -8,7 +8,7 @@
 **Tech Stack:** C (Zebra dplane framework), FRR topotest (Python).
 
 **Dependencies:** Plan A Tasks 1-3 (NhtEvent schema + template + render_schema.py). **Task 4 requires Plan A Task 4 (`nhtevent_capi.h` must exist)** — if developing standalone within sonic-frr, the message payload portion of Plan B Task 6 requires all of Plan A to be complete.
-**Corresponding spec:** [`ribfib-convergence-frr.md`](../../convergence-specs/ribfib-convergence-frr.md)
+**Corresponding spec:** [`ribfib-convergence-frr.md`](../../convergence-lld/ribfib-convergence-frr.md)
 
 ---
 
